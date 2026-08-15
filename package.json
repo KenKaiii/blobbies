@@ -38,7 +38,7 @@
     "@tauri-apps/plugin-http": "^2.5.9",
     "@tauri-apps/plugin-opener": "^2.5.4",
     "lucide-react": "^1.31.0",
-    "openai": "^6.49.0",
+    "openai": "^7.4.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "react-markdown": "^10.1.0",
