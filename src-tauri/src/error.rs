@@ -46,6 +46,16 @@ pub enum Error {
     #[error("storage error: {0}")]
     Io(String),
 
+    /// Internal process deadline, mapped to context at each user-facing call.
+    #[error("process timed out")]
+    ProcessTimeout,
+
+    /// Actionable Composio failures shown directly in the Plugins UI.
+    /// Kept separate from `Io`: prefixing a slow download with "storage error"
+    /// hid both what timed out and the terminal fallback that would unblock it.
+    #[error("{0}")]
+    Composio(String),
+
     /// Message is shown to the user, so it must stay free of internals — see
     /// `ocr::describe`.
     #[error("{0}")]
