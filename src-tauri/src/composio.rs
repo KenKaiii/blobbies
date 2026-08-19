@@ -37,7 +37,11 @@ const INSTALL_URL: &str = "https://composio.dev/install";
 /// Ceiling on the whole install. The script downloads a release bundle, so it
 /// is not instant; without a deadline a stalled transfer leaves the UI saying
 /// "Installing…" forever with no way back.
-const INSTALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(180);
+///
+/// Fifteen minutes, not three: the 0.3.3 release took 8.9 minutes on a measured
+/// slow connection, so the old deadline killed a working download.
+const INSTALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15 * 60);
+const INSTALL_TIMEOUT_HELP: &str = "Composio was still downloading after 15 minutes, so it was stopped. On a slow connection, run `curl -fsSL https://composio.dev/install | sh` in a terminal instead — it has no time limit.";
 
 /// How long the `--version` probe may take before we call the CLI absent.
 const PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
@@ -166,7 +170,7 @@ fn wait_with_timeout(
         if started.elapsed() >= deadline {
             let _ = child.kill();
             let _ = child.wait();
-            return Err(Error::Io("timed out".into()));
+            return Err(Error::ProcessTimeout);
         }
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
@@ -784,10 +788,15 @@ fn install_blocking(scratch: &Path) -> Result<String> {
         .map_err(|error| Error::Io(format!("could not run the installer: {error}")))?;
     let ran = wait_with_timeout(shell, INSTALL_TIMEOUT);
     let _ = std::fs::remove_file(&script);
-    if !ran? {
-        return Err(Error::Io(
-            "Composio's installer did not finish. Try `curl -fsSL https://composio.dev/install | sh` in a terminal.".into(),
-        ));
+    match ran {
+        Ok(true) => {}
+        Ok(false) => {
+            return Err(Error::Io(
+                "Composio's installer did not finish. Try `curl -fsSL https://composio.dev/install | sh` in a terminal.".into(),
+            ));
+        }
+        Err(Error::ProcessTimeout) => return Err(Error::Composio(INSTALL_TIMEOUT_HELP.into())),
+        Err(error) => return Err(error),
     }
 
     let binary = find_composio_binary().ok_or_else(|| {
@@ -823,13 +832,29 @@ mod tests {
         let started = std::time::Instant::now();
         let outcome = wait_with_timeout(child, std::time::Duration::from_millis(300));
         assert!(
-            outcome.is_err(),
-            "a child past its deadline must not succeed"
+            matches!(outcome, Err(Error::ProcessTimeout)),
+            "a child past its deadline must return the typed timeout"
         );
         assert!(
             started.elapsed() < std::time::Duration::from_secs(5),
             "the deadline must actually cut the wait short"
         );
+    }
+
+    #[test]
+    fn install_timeout_is_generous_and_actionable() {
+        assert_eq!(
+            INSTALL_TIMEOUT,
+            std::time::Duration::from_secs(15 * 60),
+            "the reviewed installer ceiling is 15 minutes"
+        );
+        assert_eq!(
+            Error::Composio(INSTALL_TIMEOUT_HELP.into()).to_string(),
+            INSTALL_TIMEOUT_HELP,
+            "the timeout must not regain the misleading storage-error prefix"
+        );
+        assert!(INSTALL_TIMEOUT_HELP.contains("still downloading after 15 minutes"));
+        assert!(INSTALL_TIMEOUT_HELP.contains("curl -fsSL https://composio.dev/install | sh"));
     }
 
     // Detection itself is not unit-tested: it reads `PATH` and `HOME`, and
