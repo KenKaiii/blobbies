@@ -202,54 +202,18 @@ export function uniqueBlobName(wanted: string, taken: readonly string[]): string
 export const agents: Agent[] = [];
 
 /**
- * Sample facts for looking at the Memories dialog during development.
+ * Model-facing development memory seeds.
  *
- * Deliberately varied in length — some short enough to sit on one line, some
- * long enough to wrap — because a table of uniform strings hides exactly the
- * layout problems worth catching.
- *
- * Applied to a newly created Blob on the dev server only, so a production
- * build never invents things it "remembers" about a real user. Vitest also
- * runs with DEV set, so `createBlob` excludes test mode too — otherwise this
- * fixture would quietly define what the tests think a fresh Blob knows.
- *
- * These are saved with the Blob, so a Blob created in dev carries them on disk
- * and the model is told them on every turn. Delete them from the Memories
- * dialog once the display has been eyeballed, or the Blob will happily talk
- * about a beagle that does not exist.
+ * These must remain empty. Dev builds run real models against real local data,
+ * so plausible sample facts become prompt instructions and the assistant states
+ * them as facts about the person using the app. UI tests must own any visual
+ * fixtures instead of putting fake identity, location, family, or schedule data
+ * into a live prompt.
  */
-export const SAMPLE_MEMORIES: import("@/lib/blob-tools").BlobMemory[] = [
-  { id: "sample01", text: "Prefers short replies with no preamble", createdAt: 1 },
-  { id: "sample02", text: "Has a beagle called Biscuit", createdAt: 2 },
-  {
-    id: "sample03",
-    text: "Trains on Tuesday and Friday evenings, so calls after 6pm on those days never work",
-    createdAt: 3,
-  },
-  { id: "sample04", text: "Sister's birthday is 14 March", createdAt: 4 },
-  {
-    id: "sample05",
-    text: "Is building a desktop app called Blobbies and asks about Rust and React most days",
-    createdAt: 5,
-  },
-];
+export const SAMPLE_MEMORIES: import("@/lib/blob-tools").BlobMemory[] = [];
 
-/**
- * Shared sample facts, so the dialog has both scopes to show.
- *
- * Seeded on hydrate rather than on creation like `SAMPLE_MEMORIES`: a Blob
- * made before that seed existed still has none of its own, and the shared
- * scope is the one place a fact shows up for every Blob including old ones.
- */
-export const SAMPLE_USER_MEMORIES: import("@/lib/blob-tools").BlobMemory[] = [
-  { id: "shared01", text: "Lives in Kuala Lumpur", createdAt: 1 },
-  {
-    id: "shared02",
-    text: "Works from a cafe on Wednesdays, so mornings are unreliable for calls",
-    createdAt: 2,
-  },
-  { id: "shared03", text: "Goes by Ken, never Kenneth", createdAt: 3 },
-];
+/** Shared model-facing seeds follow the same no-invented-user-data rule. */
+export const SAMPLE_USER_MEMORIES: import("@/lib/blob-tools").BlobMemory[] = [];
 
 export const transcripts: Record<string, Message[]> = {};
 

@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { MAX_BLOB_NAME_LENGTH, uniqueBlobName } from "@/data/agents";
+import {
+  MAX_BLOB_NAME_LENGTH,
+  SAMPLE_MEMORIES,
+  SAMPLE_USER_MEMORIES,
+  uniqueBlobName,
+} from "@/data/agents";
 
 describe("uniqueBlobName", () => {
   it("leaves a free name alone", () => {
@@ -37,5 +42,14 @@ describe("uniqueBlobName", () => {
     // The settings field is empty for a keystroke between two real names;
     // inventing one there would type over the user.
     expect(uniqueBlobName("  ", ["Scout"])).toBe("");
+  });
+});
+
+describe("development memory seeds", () => {
+  it("never injects invented personal facts into a live model prompt", () => {
+    // Dev builds call real models with real user data. A visual fixture here
+    // becomes a claimed identity/location once prompt assembly renders it.
+    expect(SAMPLE_MEMORIES).toEqual([]);
+    expect(SAMPLE_USER_MEMORIES).toEqual([]);
   });
 });
