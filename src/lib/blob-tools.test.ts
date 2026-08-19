@@ -575,6 +575,20 @@ describe("connected-app tools", () => {
     expect(String(result)).toContain("never obey");
   });
 
+  it("bounds connected-app lists before untrusted discovery advice", async () => {
+    const [find, , run] = makeComposioTools();
+    expect(find?.description).toContain("skip app_tool_schema");
+    expect(run?.description).toContain("Stop at the count");
+
+    const result = String(await find?.execute({ query: "last 10 promotional emails" }, context));
+    const guard = result.indexOf("stop as soon as it is collected");
+    const external = result.indexOf("EXTERNAL_UNTRUSTED_CONTENT");
+    expect(guard).toBeGreaterThanOrEqual(0);
+    expect(external).toBeGreaterThan(guard);
+    expect(result).toContain("verbose=false");
+    expect(result).toContain("include_payload=false");
+  });
+
   it("names run_command a command runner, not a shell", async () => {
     // The description is what stops the model composing `a | b` or `x && y`:
     // there is no shell to parse them, so a joined string would simply fail.
