@@ -1186,8 +1186,8 @@ export function makeRoutineTools(routines: RoutineAccess): AgentTool[] {
  * Gmail alone exposes 61 tools and every connected app adds its own, so
  * shipping definitions would swamp the prompt's cached prefix and need
  * repeating per app. Instead the Blob discovers what it needs at call time —
- * search, then schema, then execute — which scales to any app the user
- * connects later without a line of code, and keeps the prompt flat.
+ * search, inspect a schema only when the plan lacks an argument, then execute
+ * — which scales to any app the user connects later and keeps the prompt flat.
  *
  * Every result is fenced by `wrapUntrusted`: an inbox, a CRM record or a
  * calendar invite is written by whoever emailed the user, so "ignore previous
@@ -1195,6 +1195,13 @@ export function makeRoutineTools(routines: RoutineAccess): AgentTool[] {
  * instruction. This is the highest-value fence in the app — these tools hold
  * real credentials and can send mail.
  */
+const CONNECTED_APP_EFFICIENCY_GUIDANCE =
+  "Efficiency rules from Blobbies: when the user requests a fixed number of items, " +
+  "request that number and stop as soon as it is collected — never paginate to the end. " +
+  "For Gmail lists (subjects, senders, dates, or summaries), use verbose=false and " +
+  "include_payload=false; fetch a selected message body only when the user actually needs it. " +
+  "If the discovery plan already gives the exact arguments for the needed tool, run it directly; " +
+  "use app_tool_schema only when an argument is missing or unclear.";
 export function makeComposioTools(): AgentTool[] {
   const searchParams = z.object({
     query: z
@@ -1209,10 +1216,15 @@ export function makeComposioTools(): AgentTool[] {
     description:
       "Start here for anything in the user's own apps — their email, calendar, " +
       "files, chat, CRM. Describe the task; you get back exact tool names and " +
-      "a plan. You cannot know these names in advance, so never guess one: " +
-      "look it up, check it with app_tool_schema, then run it.",
+      "a plan. You cannot know these names in advance, so never guess one. " +
+      "When the plan already supplies complete arguments, skip app_tool_schema " +
+      "and run the tool directly; inspect the schema only for missing or unclear fields.",
     parameters: searchParams,
-    execute: async (args) => wrapUntrusted(await composioSearch(args.query), "composio"),
+    execute: async (args) =>
+      `${CONNECTED_APP_EFFICIENCY_GUIDANCE}\n\n${wrapUntrusted(
+        await composioSearch(args.query),
+        "composio",
+      )}`,
   };
 
   const schemaParams = z.object({
@@ -1238,11 +1250,11 @@ export function makeComposioTools(): AgentTool[] {
     name: "app_run_tool",
     description:
       "Run one of the user's app tools and return what it says. Reading is " +
-      "free — fetch, list, search away. Anything that leaves a trace (sending, " +
-      "replying, deleting, creating, updating) needs the user's word first: " +
-      "say exactly what you are about to do and wait for them to agree. " +
-      "If the result looks cut off, ask for fewer items rather than repeating " +
-      "the same call.",
+      "free — fetch, list, search away. Stop at the count the user requested; " +
+      "do not paginate farther. Anything that leaves a trace (sending, replying, " +
+      "deleting, creating, updating) needs the user's word first: say exactly " +
+      "what you are about to do and wait for them to agree. If the result looks " +
+      "cut off, ask for fewer items rather than repeating the same call.",
     parameters: runParams,
     // Sequential: these have side effects — sending mail, creating events —
     // and must not be fired in parallel batches.
