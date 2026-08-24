@@ -24,7 +24,7 @@ path = "src/main.rs"
 [build-dependencies]
 tauri-build = { version = "2.6.3", features = [] }
 # Verifies the pinned checksums of the OCR models build.rs downloads.
-sha2 = "0.10.9"
+sha2 = "0.11.0"
 
 [dependencies]
 # `tray-icon` puts Blobbies in the menu bar (src/tray.rs); `image-png` decodes
