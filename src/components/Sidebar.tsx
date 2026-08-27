@@ -87,6 +87,7 @@ interface SidebarProps {
   onSelectChannel: (id: string) => void;
   /** Start a channel; App names it and opens it. */
   onCreateChannel: () => void;
+  onCreateDirectMessage?: (agent: Agent) => void;
   composing: boolean;
   userName: string;
   /** The Blob whose turn is running; its row and pin tile animate busy. */
@@ -249,6 +250,7 @@ export function Sidebar({
   selectedChannelId = null,
   onSelectChannel,
   onCreateChannel,
+  onCreateDirectMessage,
   composing,
   userName,
   thinkingIds,
@@ -264,6 +266,7 @@ export function Sidebar({
   onDelete,
 }: SidebarProps) {
   const [menuOpen, setMenuOpen] = useState(false);
+  const [dmPickerOpen, setDmPickerOpen] = useState(false);
   const [contextMenu, setContextMenu] = useState<MenuTarget | null>(null);
   /** Group being renamed inline, and the text typed so far. */
   const [renaming, setRenaming] = useState<{ from: string; draft: string } | null>(null);
@@ -1055,30 +1058,85 @@ export function Sidebar({
             </button>
           </div>
           <ul className="agent-group-rows">
-            {channels.map((channel) => (
-              <li key={channel.id}>
-                <button
-                  type="button"
-                  className={
-                    channel.id === selectedChannelId
-                      ? "channel-row channel-row-open"
-                      : "channel-row"
-                  }
-                  aria-current={channel.id === selectedChannelId ? "true" : undefined}
-                  onClick={() => onSelectChannel(channel.id)}
-                >
-                  <span className="channel-row-name"># {channel.name}</span>
-                  {channel.unread === true ? (
-                    <span className="unread-dot unread-dot-shimmer" aria-hidden="true" />
-                  ) : null}
-                  {channel.memberIds.length >= MAX_CHANNEL_MEMBERS ? (
-                    <span className="section-count">
-                      {channel.memberIds.length}/{MAX_CHANNEL_MEMBERS}
+            {channels
+              .filter((channel) => channel.kind === "channel")
+              .map((channel) => (
+                <li key={channel.id}>
+                  <button
+                    type="button"
+                    className={
+                      channel.id === selectedChannelId
+                        ? "channel-row channel-row-open"
+                        : "channel-row"
+                    }
+                    aria-current={channel.id === selectedChannelId ? "true" : undefined}
+                    onClick={() => onSelectChannel(channel.id)}
+                  >
+                    <span className="channel-row-name"># {channel.name}</span>
+                    {channel.unread === true ? (
+                      <span className="unread-dot unread-dot-shimmer" aria-hidden="true" />
+                    ) : null}
+                    {channel.memberIds.length >= MAX_CHANNEL_MEMBERS ? (
+                      <span className="section-count">
+                        {channel.memberIds.length}/{MAX_CHANNEL_MEMBERS}
+                      </span>
+                    ) : null}
+                  </button>
+                </li>
+              ))}
+          </ul>
+          <div className="section-header">
+            <span className="section-name">Direct messages</span>
+            <button
+              type="button"
+              className="section-remove"
+              aria-label="New direct message"
+              aria-expanded={dmPickerOpen}
+              onClick={() => setDmPickerOpen((open) => !open)}
+            >
+              +
+            </button>
+          </div>
+          {dmPickerOpen ? (
+            <div className="dm-picker" role="dialog" aria-label="New direct message">
+              {agents
+                .filter((agent) => agent.hidden !== true)
+                .map((agent) => (
+                  <button
+                    key={agent.id}
+                    type="button"
+                    onClick={() => {
+                      onCreateDirectMessage?.(agent);
+                      setDmPickerOpen(false);
+                    }}
+                  >
+                    {agent.name}
+                  </button>
+                ))}
+            </div>
+          ) : null}
+          <ul className="agent-group-rows">
+            {channels
+              .filter((channel) => channel.kind === "dm")
+              .map((channel) => (
+                <li key={channel.id}>
+                  <button
+                    type="button"
+                    className={
+                      channel.id === selectedChannelId
+                        ? "channel-row channel-row-open"
+                        : "channel-row"
+                    }
+                    aria-current={channel.id === selectedChannelId ? "true" : undefined}
+                    onClick={() => onSelectChannel(channel.id)}
+                  >
+                    <span className="channel-row-name">
+                      {agents.find((agent) => agent.id === channel.memberIds[0])?.name ??
+                        channel.name}
                     </span>
-                  ) : null}
-                </button>
-              </li>
-            ))}
+                  </button>
+                </li>
+              ))}
           </ul>
         </div>
       ) : null}

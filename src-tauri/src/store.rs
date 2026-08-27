@@ -116,7 +116,8 @@ fn is_valid_blob_id(id: &str) -> bool {
 
 /// Resolve a slice key to its on-disk path, rejecting anything not on the
 /// allowlist. Keys are `<root-slice>`, `blobs/<uuid>/<blob-slice>` or
-/// `groups/<uuid>/<group-slice>`.
+/// `groups/<uuid>/<group-slice>`, or
+/// `channels/<uuid>/threads/<message-uuid>/<channel-slice>`.
 fn resolve_slice_path(data_root: &Path, key: &str) -> Result<PathBuf> {
     if ROOT_SLICES.contains(&key) {
         return Ok(data_root.join(format!("{key}.json")));
@@ -144,12 +145,25 @@ fn resolve_slice_path(data_root: &Path, key: &str) -> Result<PathBuf> {
     if let Some(rest) = key.strip_prefix("channels/")
         && let Some((id, slice)) = rest.split_once('/')
         && is_valid_blob_id(id)
-        && (CHANNEL_SLICES.contains(&slice) || is_transcript_archive(slice))
     {
-        return Ok(data_root
-            .join("channels")
-            .join(id)
-            .join(format!("{slice}.json")));
+        if CHANNEL_SLICES.contains(&slice) || is_transcript_archive(slice) {
+            return Ok(data_root
+                .join("channels")
+                .join(id)
+                .join(format!("{slice}.json")));
+        }
+        if let Some(thread) = slice.strip_prefix("threads/")
+            && let Some((message_id, thread_slice)) = thread.split_once('/')
+            && is_valid_blob_id(message_id)
+            && (CHANNEL_SLICES.contains(&thread_slice) || is_transcript_archive(thread_slice))
+        {
+            return Ok(data_root
+                .join("channels")
+                .join(id)
+                .join("threads")
+                .join(message_id)
+                .join(format!("{thread_slice}.json")));
+        }
     }
     Err(Error::InvalidSliceKey)
 }
@@ -856,6 +870,26 @@ mod tests {
         assert!(resolve_slice_path(root, &format!("channels/{BLOB_ID}/transcript")).is_ok());
         assert!(resolve_slice_path(root, &format!("channels/{BLOB_ID}/recap")).is_ok());
         assert!(resolve_slice_path(root, &format!("channels/{BLOB_ID}/transcript-3")).is_ok());
+        let message_id = "9f1b2c3d-4e5f-4a6b-8c7d-0e1f2a3b4c5d";
+        assert_eq!(
+            resolve_slice_path(
+                root,
+                &format!("channels/{BLOB_ID}/threads/{message_id}/transcript")
+            )
+            .unwrap_or_else(|_| panic!("thread")),
+            root.join("channels")
+                .join(BLOB_ID)
+                .join("threads")
+                .join(message_id)
+                .join("transcript.json")
+        );
+        assert!(
+            resolve_slice_path(
+                root,
+                &format!("channels/{BLOB_ID}/threads/{message_id}/recap")
+            )
+            .is_ok()
+        );
     }
 
     #[test]
@@ -921,6 +955,10 @@ mod tests {
             "groups/../evil/transcript",
             &format!("channels/{BLOB_ID}/config"),
             "channels/not-a-uuid/transcript",
+            &format!("channels/{BLOB_ID}/threads/not-a-uuid/transcript"),
+            &format!("channels/{BLOB_ID}/threads/../transcript"),
+            &format!("channels/{BLOB_ID}/threads/{BLOB_ID}/unknown"),
+            &format!("channels/{BLOB_ID}/threads/{BLOB_ID}/transcript/../../evil"),
             "unknown",
             "users",
             "user/x",

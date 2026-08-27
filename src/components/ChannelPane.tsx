@@ -22,16 +22,20 @@ export function ChannelPane(props: {
   onReasoningChange: (on: boolean) => void;
   onSend: (text: string, options?: { replyTo?: string; replyToId?: string }) => void;
   onStop?: () => void;
+  onOpenThread?: (message: Message) => void;
+  threadReplyCounts?: Readonly<Record<string, number>>;
   onOpenSettings: () => void;
 }) {
   if (props.members.length === 0) {
     return (
       <section className="labs-pane" aria-label="Channels (Labs)">
         <header className="labs-pane-header" data-tauri-drag-region>
-          #{props.channel.name}
+          {props.channel.kind === "dm" ? props.channel.name : `#${props.channel.name}`}
         </header>
         <p className="labs-pane-header">
-          No Blobs in this channel — add some from its member list.
+          {props.channel.kind === "dm"
+            ? "This Blob is unavailable. Messages are kept, but sending is disabled."
+            : "No Blobs in this channel — add some from its member list."}
         </p>
       </section>
     );
@@ -43,7 +47,14 @@ export function ChannelPane(props: {
   return (
     <ChatPane
       agent={speaker}
-      group={{ id: props.channel.id, name: props.channel.name, members: props.members }}
+      group={{
+        id: props.channel.id,
+        name:
+          props.channel.kind === "dm"
+            ? (props.members[0]?.name ?? props.channel.name)
+            : props.channel.name,
+        members: props.members,
+      }}
       messages={props.messages}
       {...(props.notSaving === undefined ? {} : { notSaving: props.notSaving })}
       {...(props.thinking === undefined ? {} : { thinking: props.thinking })}
@@ -54,6 +65,8 @@ export function ChannelPane(props: {
       onReasoningChange={props.onReasoningChange}
       onSend={props.onSend}
       {...(props.onStop === undefined ? {} : { onStop: props.onStop })}
+      {...(props.onOpenThread === undefined ? {} : { onOpenThread: props.onOpenThread })}
+      threadReplyCounts={props.threadReplyCounts ?? {}}
       detailOpen={false}
       onToggleDetail={() => {}}
       onOpenSettings={props.onOpenSettings}

@@ -18,6 +18,7 @@ import {
 import { SettingsPanel } from "@/components/SettingsPanel";
 import { Sidebar } from "@/components/Sidebar";
 import { SlidePanel } from "@/components/SlidePanel";
+import { ThreadPane } from "@/components/ThreadPane";
 import {
   type Agent,
   type AgentShape,
@@ -49,9 +50,12 @@ import type { BlobMemory, RosterAccess, RoutineAccess } from "@/lib/blob-tools";
 import {
   type Channel,
   channelConversationId,
+  createDirectMessage,
+  findDirectMessage,
   importGroupsAsChannels,
   MAX_CHANNEL_MEMBERS,
   membersOfChannel,
+  threadConversationId,
 } from "@/lib/channels";
 import { composioSignedIn, connectedAppNames, setComposioToolkits } from "@/lib/composio";
 import { contextWindow } from "@/lib/context-window";
@@ -288,6 +292,7 @@ export function App() {
    */
   const [channels, setChannels] = useState<Channel[]>([]);
   const [selectedChannelId, setSelectedChannelId] = useState<string | null>(null);
+  const [selectedThreadRoot, setSelectedThreadRoot] = useState<Message | null>(null);
   const channelsRef = useRef(channels);
   channelsRef.current = channels;
   const selectedChannelIdRef = useRef(selectedChannelId);
@@ -1013,6 +1018,17 @@ export function App() {
    * named few is the threads/DM work that follows; the transcript and the
    * mention routing work identically either way.
    */
+  const createDm = (member: Agent) => {
+    const existing = findDirectMessage(channelsRef.current, member.id);
+    if (existing !== undefined) {
+      openChannel(existing.id);
+      return;
+    }
+    const channel = createDirectMessage(member);
+    changeChannels([...channelsRef.current, channel]);
+    openChannel(channel.id);
+  };
+
   const createChannel = () => {
     const wanted = "new-channel";
     let name = wanted;
@@ -1028,6 +1044,7 @@ export function App() {
     const channel: Channel = {
       id: crypto.randomUUID(),
       name,
+      kind: "channel",
       memberIds: agentsRef.current
         .filter((candidate) => candidate.hidden !== true)
         .slice(0, MAX_CHANNEL_MEMBERS)
@@ -1409,6 +1426,32 @@ export function App() {
       cancelled = true;
     };
   }, [activeChannelId]);
+
+  const activeThreadId =
+    activeChannelId === undefined || selectedThreadRoot === null
+      ? undefined
+      : threadConversationId(activeChannelId, selectedThreadRoot.id);
+  useEffect(() => {
+    if (
+      activeThreadId === undefined ||
+      activeChannelId === undefined ||
+      selectedThreadRoot === null
+    )
+      return;
+    let cancelled = false;
+    void store.loadThreadTranscript(activeChannelId, selectedThreadRoot.id).then((transcript) => {
+      if (!cancelled && transcript !== null) {
+        mutateSent((previous) =>
+          previous[activeThreadId] === undefined
+            ? { ...previous, [activeThreadId]: transcript }
+            : previous,
+        );
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeThreadId, activeChannelId, selectedThreadRoot, mutateSent]);
 
   // First enable after launch (Settings → Labs): the same one-way import the
   // startup hydration performs when the flag was already on at launch. The
@@ -3373,6 +3416,28 @@ export function App() {
       reply,
     );
 
+  const sendToThread = (
+    channel: Channel,
+    root: Message,
+    text: string,
+    reply: { replyTo?: string; replyToId?: string },
+  ) =>
+    sendToRoom(
+      {
+        convoId: threadConversationId(channel.id, root.id),
+        roomId: channel.id,
+        members: () =>
+          channelMembers(
+            channelsRef.current.find((candidate) => candidate.id === channel.id) ?? channel,
+          ),
+        name: () => channel.name,
+        onUnheard: () => {},
+        onScreen: () => selectedThreadRoot?.id === root.id,
+      },
+      text,
+      reply,
+    );
+
   const sendMessage = (
     text: string,
     options?: { replyTo?: string; replyToId?: string; files?: readonly PickedFile[] },
@@ -3537,6 +3602,7 @@ export function App() {
         selectedChannelId={selectedChannelId}
         onSelectChannel={openChannel}
         onCreateChannel={createChannel}
+        onCreateDirectMessage={createDm}
         onChangeGroups={changeGroups}
         onRenameGroup={renameGroup}
         composing={composing}
@@ -3579,23 +3645,67 @@ export function App() {
           const members = channelMembers(selectedChannel);
           const speaking = members.find((member) => member.id === thinkingFor);
           return (
-            <ChannelPane
-              channel={selectedChannel}
-              members={members}
-              messages={sentByAgent[channelConversationId(selectedChannel.id)] ?? []}
-              notSaving={unsavedKeys.has(
-                store.conversationSliceKey(channelConversationId(selectedChannel.id)),
+            <div className="channel-thread-layout">
+              <ChannelPane
+                channel={selectedChannel}
+                members={members}
+                messages={sentByAgent[channelConversationId(selectedChannel.id)] ?? []}
+                notSaving={unsavedKeys.has(
+                  store.conversationSliceKey(channelConversationId(selectedChannel.id)),
+                )}
+                thinking={speaking !== undefined}
+                {...(speaking === undefined ? {} : { thinkingAgent: speaking })}
+                model={model}
+                onModelChange={changeModel}
+                reasoning={reasoning}
+                onReasoningChange={changeReasoning}
+                onSend={sendMessage}
+                onStop={stopTurn}
+                onOpenThread={(message) => setSelectedThreadRoot(message)}
+                threadReplyCounts={selectedChannel.threadReplyCounts ?? {}}
+                onOpenSettings={openSettings}
+              />
+              {selectedThreadRoot === null ? null : (
+                <ThreadPane
+                  root={selectedThreadRoot}
+                  members={members}
+                  messages={
+                    sentByAgent[threadConversationId(selectedChannel.id, selectedThreadRoot.id)] ??
+                    []
+                  }
+                  thinking={speaking !== undefined}
+                  {...(speaking === undefined ? {} : { thinkingAgent: speaking })}
+                  model={model}
+                  onModelChange={changeModel}
+                  reasoning={reasoning}
+                  onReasoningChange={changeReasoning}
+                  onSend={(text, reply = {}) => {
+                    const conversationId = threadConversationId(
+                      selectedChannel.id,
+                      selectedThreadRoot.id,
+                    );
+                    const before = sentRef.current[conversationId]?.length ?? 0;
+                    sendToThread(selectedChannel, selectedThreadRoot, text, reply);
+                    changeChannels(
+                      channelsRef.current.map((entry) =>
+                        entry.id === selectedChannel.id
+                          ? {
+                              ...entry,
+                              threadReplyCounts: {
+                                ...entry.threadReplyCounts,
+                                [selectedThreadRoot.id]: before + 1,
+                              },
+                            }
+                          : entry,
+                      ),
+                    );
+                  }}
+                  onStop={stopTurn}
+                  onClose={() => setSelectedThreadRoot(null)}
+                  onOpenSettings={openSettings}
+                />
               )}
-              thinking={speaking !== undefined}
-              {...(speaking === undefined ? {} : { thinkingAgent: speaking })}
-              model={model}
-              onModelChange={changeModel}
-              reasoning={reasoning}
-              onReasoningChange={changeReasoning}
-              onSend={sendMessage}
-              onStop={stopTurn}
-              onOpenSettings={openSettings}
-            />
+            </div>
           );
         })()
       ) : activeMode.kind === "chat" &&

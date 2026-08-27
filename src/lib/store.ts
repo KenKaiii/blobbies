@@ -2,7 +2,12 @@ import { invoke } from "@tauri-apps/api/core";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import type { Agent, Message, Routine } from "@/data/agents";
 import type { BlobMemory } from "@/lib/blob-tools";
-import { type Channel, channelIdFromConversation } from "@/lib/channels";
+import {
+  type Channel,
+  channelIdFromConversation,
+  normalizeChannels,
+  threadFromConversation,
+} from "@/lib/channels";
 import { type Group, groupIdFromConversation } from "@/lib/groups";
 import type { McpServerConfig } from "@/lib/mcp";
 import type { Recap } from "@/lib/recap";
@@ -561,12 +566,12 @@ export function saveGroupTranscript(id: string, messages: Message[]): void {
 export async function loadChannels(): Promise<Channel[] | null> {
   if (isTauri()) {
     const list = await invoke("channels_read");
-    return Array.isArray(list) ? (list as Channel[]) : null;
+    return Array.isArray(list) ? normalizeChannels(list) : null;
   }
   const raw = backendGet("slice:channels");
   try {
     const parsed = raw === null ? null : (JSON.parse(raw) as { value?: unknown });
-    return Array.isArray(parsed?.value) ? (parsed.value as Channel[]) : null;
+    return Array.isArray(parsed?.value) ? normalizeChannels(parsed.value) : null;
   } catch {
     return null;
   }
@@ -589,12 +594,32 @@ export function saveChannelTranscript(id: string, messages: Message[]): void {
   saveTranscript(`channels/${id}`, messages);
 }
 
+export async function loadThreadTranscript(
+  channelId: string,
+  messageId: string,
+): Promise<Message[] | null> {
+  return await loadTranscript(`channels/${channelId}/threads/${messageId}`);
+}
+
+export function saveThreadTranscript(
+  channelId: string,
+  messageId: string,
+  messages: Message[],
+): void {
+  saveTranscript(`channels/${channelId}/threads/${messageId}`, messages);
+}
+
 /**
  * Persist a conversation without caring which kind it is — the turn loop
  * writes through here, since a Blob's reply lands in its own transcript or in
  * a group's depending only on where it was asked.
  */
 export function saveConversation(conversationId: string, messages: Message[]): void {
+  const thread = threadFromConversation(conversationId);
+  if (thread !== null) {
+    saveThreadTranscript(thread.channelId, thread.messageId, messages);
+    return;
+  }
   const channelId = channelIdFromConversation(conversationId);
   if (channelId !== null) {
     saveChannelTranscript(channelId, messages);
@@ -616,6 +641,10 @@ export function saveConversation(conversationId: string, messages: Message[]): v
  * drift from this one and quietly stop matching.
  */
 export function conversationSliceKey(conversationId: string): string {
+  const thread = threadFromConversation(conversationId);
+  if (thread !== null) {
+    return `channels/${thread.channelId}/threads/${thread.messageId}/transcript`;
+  }
   const channelId = channelIdFromConversation(conversationId);
   if (channelId !== null) {
     return `channels/${channelId}/transcript`;
@@ -646,6 +675,10 @@ export function saveRecap(conversationId: string, recap: Recap): void {
 }
 
 function recapSliceKey(conversationId: string): string {
+  const thread = threadFromConversation(conversationId);
+  if (thread !== null) {
+    return `channels/${thread.channelId}/threads/${thread.messageId}/recap`;
+  }
   const channelId = channelIdFromConversation(conversationId);
   if (channelId !== null) {
     return `channels/${channelId}/recap`;

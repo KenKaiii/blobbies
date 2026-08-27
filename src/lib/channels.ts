@@ -1,25 +1,20 @@
 import type { Agent } from "@/data/agents";
 import { type Group, groupConversationId } from "@/lib/groups";
 
-/**
- * Channels (Labs): rooms with explicit membership, the successor to
- * name-keyed group chats. A group's members are whichever Blobs carry its
- * name in `section`; a channel's are an id list it owns itself, so a Blob can
- * sit in many channels and leaving one touches nothing but the channel.
- *
- * Deliberately minimal for the first Labs release: no per-message threads yet
- * (the reply affordance in a transcript covers quoting), and a DM is just a
- * one-member channel — the composer's @mention routing does the rest.
- */
+export type ChannelKind = "channel" | "dm";
+
 export interface Channel {
   id: string;
   name: string;
+  kind: ChannelKind;
   /** Member Blob ids, in speaking order. Resolved against the live roster. */
   memberIds: string[];
   /** Set on the one-way import from a group chat, for the sidebar note. */
   importedFrom?: string;
   /** Replies landed while the user was in another conversation. */
   unread?: boolean;
+  /** Number of persisted replies keyed by root channel message id. */
+  threadReplyCounts?: Record<string, number>;
 }
 
 /** Conversation id prefix, mirroring `groupConversationId`. */
@@ -27,10 +22,21 @@ export function channelConversationId(id: string): string {
   return `channel:${id}`;
 }
 
-/** The channel half of `groupIdFromConversation` (which stays group-only). */
+export function threadConversationId(channelId: string, messageId: string): string {
+  return `channel:${channelId}:thread:${messageId}`;
+}
+
+export function threadFromConversation(
+  conversationId: string,
+): { channelId: string; messageId: string } | null {
+  const match = /^channel:([^:]+):thread:([^:]+)$/.exec(conversationId);
+  return match === null ? null : { channelId: match[1] ?? "", messageId: match[2] ?? "" };
+}
+
+/** Parses only base channel ids; thread ids deliberately fail closed. */
 export function channelIdFromConversation(conversationId: string): string | null {
-  const id = conversationId.replace(/^channel:/, "");
-  return id === conversationId ? null : id;
+  const match = /^channel:([^:]+)$/.exec(conversationId);
+  return match?.[1] ?? null;
 }
 
 export const MAX_CHANNEL_MEMBERS = 8;
@@ -63,7 +69,47 @@ export function importGroupsAsChannels(
   return groups.map((group) => ({
     id: crypto.randomUUID(),
     name: group.name,
+    kind: "channel",
     memberIds: members(group).map((member) => member.id),
     importedFrom: groupConversationId(group.id),
   }));
+}
+
+export function findDirectMessage(
+  channels: readonly Channel[],
+  memberId: string,
+): Channel | undefined {
+  return channels.find(
+    (channel) =>
+      channel.kind === "dm" && channel.memberIds.length === 1 && channel.memberIds[0] === memberId,
+  );
+}
+
+export function createDirectMessage(member: Agent): Channel {
+  return { id: crypto.randomUUID(), name: member.name, kind: "dm", memberIds: [member.id] };
+}
+
+/** Validate editable persisted data and default legacy rows to ordinary channels. */
+export function normalizeChannels(value: unknown): Channel[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry): Channel[] => {
+    if (entry === null || typeof entry !== "object") return [];
+    const row = entry as Record<string, unknown>;
+    const kind =
+      row.kind === "dm"
+        ? "dm"
+        : row.kind === undefined || row.kind === "channel"
+          ? "channel"
+          : null;
+    if (
+      kind === null ||
+      typeof row.id !== "string" ||
+      typeof row.name !== "string" ||
+      !Array.isArray(row.memberIds) ||
+      !row.memberIds.every((id) => typeof id === "string") ||
+      (kind === "dm" && row.memberIds.length !== 1)
+    )
+      return [];
+    return [{ ...(row as unknown as Channel), kind }];
+  });
 }

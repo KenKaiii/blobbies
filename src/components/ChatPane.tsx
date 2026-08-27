@@ -65,6 +65,9 @@ interface ChatPaneProps {
   group?: { id: string; name: string; members: readonly Agent[] };
   /** Rename the open group (its members move with it — see App.renameGroup). */
   onRenameGroup?: (name: string) => void;
+  /** Channels replace Reply with a separate persistent thread action. */
+  onOpenThread?: (message: Message) => void;
+  threadReplyCounts?: Readonly<Record<string, number>>;
   /**
    * This conversation's last save failed, so what is on screen is no longer
    * reaching disk. Almost always a transcript past the 8 MB slice cap.
@@ -289,6 +292,8 @@ interface MessageRowProps {
   onTogglePicker: () => void;
   onReact: (emoji: string) => void;
   onReply: () => void;
+  onOpenThread?: (() => void) | undefined;
+  replyCount?: number | undefined;
 }
 
 /** A bubble plus its hover/focus action bar, reaction picker and reaction badge. */
@@ -306,6 +311,8 @@ function MessageRow({
   onTogglePicker,
   onReact,
   onReply,
+  onOpenThread,
+  replyCount,
 }: MessageRowProps) {
   const side = message.kind === "text" && message.author === "user" ? "user" : "agent";
   return (
@@ -379,8 +386,8 @@ function MessageRow({
           <button
             type="button"
             className="icon-button message-action"
-            aria-label="Reply"
-            onClick={onReply}
+            aria-label={onOpenThread === undefined ? "Reply" : "Open thread"}
+            onClick={onOpenThread ?? onReply}
           >
             <CornerUpRight size={15} strokeWidth={1.8} aria-hidden="true" />
           </button>
@@ -398,6 +405,11 @@ function MessageRow({
           </button>
         </div>
         <div className="message-stack">
+          {replyCount === undefined || replyCount === 0 ? null : (
+            <button type="button" className="thread-reply-count" onClick={onOpenThread}>
+              {replyCount} {replyCount === 1 ? "reply" : "replies"}
+            </button>
+          )}
           {message.kind !== "text" || (message.attachments ?? []).length === 0 ? null : (
             <span className="message-attachments">
               {(message.attachments ?? []).map((attachment) => (
@@ -576,6 +588,8 @@ export function ChatPane({
   notSaving = false,
   group,
   onRenameGroup,
+  onOpenThread,
+  threadReplyCounts = {},
   thinking = false,
   thinkingAgent,
   onRetry,
@@ -1934,6 +1948,10 @@ export function ChatPane({
                     }
                     onReact={(emoji) => toggleReaction(message.id, emoji)}
                     onReply={() => startReply(message)}
+                    onOpenThread={
+                      onOpenThread === undefined ? undefined : () => onOpenThread(message)
+                    }
+                    replyCount={threadReplyCounts[message.id]}
                   />
                 ),
               ];

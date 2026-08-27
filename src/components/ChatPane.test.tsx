@@ -71,6 +71,33 @@ const endPop = (target: Element, animationName = "message-jelly") => {
 };
 
 describe("ChatPane", () => {
+  it("uses persistent thread actions and counts only when requested", async () => {
+    const onOpenThread = vi.fn();
+    const { rerender } = render(pane(false, vi.fn(), [messages[0] as Message]));
+    expect(screen.getByRole("button", { name: "Reply" })).toBeInTheDocument();
+
+    rerender(
+      <ChatPane
+        agent={agent}
+        messages={[messages[0] as Message]}
+        onOpenThread={onOpenThread}
+        threadReplyCounts={{ m1: 2 }}
+        model=""
+        onModelChange={() => {}}
+        reasoning={false}
+        onReasoningChange={() => {}}
+        onSend={() => {}}
+        detailOpen={false}
+        onToggleDetail={() => {}}
+        onOpenSettings={() => {}}
+      />,
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Open thread" }));
+    expect(onOpenThread).toHaveBeenCalledWith(messages[0]);
+    expect(screen.getByRole("button", { name: "2 replies" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Reply" })).not.toBeInTheDocument();
+  });
+
   it("turns the send circle into Stop while replying, and takes Escape", async () => {
     const user = userEvent.setup();
     const onStop = vi.fn();

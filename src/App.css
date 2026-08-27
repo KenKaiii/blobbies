@@ -4018,6 +4018,73 @@ a.modal-button {
   transition: border-color var(--duration-compose) var(--ease-standard);
 }
 
+.channel-thread-layout {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+}
+
+.channel-thread-layout > .chat-pane {
+  min-width: 0;
+  flex: 1;
+}
+
+.thread-pane {
+  width: min(360px, 38vw);
+  border-left: 1px solid var(--border-subtle);
+  background: var(--surface-primary);
+  display: flex;
+  flex-direction: column;
+}
+
+.thread-pane > .chat-pane {
+  min-height: 0;
+  flex: 1;
+}
+
+.thread-pane-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.thread-root {
+  padding: 10px 12px;
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.thread-reply-count {
+  border: 0;
+  background: none;
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  padding: 2px 0;
+}
+
+.dm-picker {
+  display: grid;
+  gap: 2px;
+  padding: 4px 8px 8px;
+}
+
+.dm-picker button {
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  padding: 7px 8px;
+  text-align: left;
+}
+
+.dm-picker button:hover {
+  background: var(--surface-hover);
+}
+
 .composer-main {
   display: flex;
   /* Buttons hug the bottom edge while the textarea grows upward. */
