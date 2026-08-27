@@ -36,11 +36,13 @@ const rail = (
     onSelectChannel={() => {}}
     onCreateChannel={() => {}}
     onCreateDirectMessage={onCreateDirectMessage}
+    onDeleteChannel={() => {}}
     composing={false}
     userName="Ken Kai"
     thinkingIds={new Set(activity === undefined ? [] : [ken.id])}
     {...(activity === undefined ? {} : { activity })}
     onSelect={() => {}}
+    onReorderBlobs={() => {}}
     onStartCompose={() => {}}
     onOpenSettings={() => {}}
     onOpenPlugins={() => {}}

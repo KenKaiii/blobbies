@@ -11,7 +11,7 @@ describe("WorkspaceLayout", () => {
     expect(container.querySelector("[data-workspace-region='detail']")).toBeNull();
   });
 
-  it("keeps primary and detail mounted for responsive split or replacement", async () => {
+  it("replaces the primary region with detail", async () => {
     const close = vi.fn();
     const { container } = render(
       <WorkspaceLayout
@@ -24,8 +24,9 @@ describe("WorkspaceLayout", () => {
       />,
     );
     expect(container.firstChild).toHaveAttribute("data-detail-open", "true");
-    expect(container.querySelector("[data-workspace-region='primary']")).toBeInTheDocument();
+    expect(container.querySelector("[data-workspace-region='primary']")).toBeNull();
     expect(container.querySelector("[data-workspace-region='detail']")).toBeInTheDocument();
+    expect(screen.queryByText("Channel")).toBeNull();
     await userEvent.click(screen.getByRole("button", { name: "Back to channel" }));
     expect(close).toHaveBeenCalledOnce();
   });

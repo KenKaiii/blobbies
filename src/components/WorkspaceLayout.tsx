@@ -9,14 +9,15 @@ export function WorkspaceLayout({ primary, detail }: { primary: ReactNode; detai
       data-detail-open={detailOpen}
       aria-label="Conversation workspace"
     >
-      <div className="workspace-primary" data-workspace-region="primary">
-        {primary}
-      </div>
       {detailOpen ? (
         <div className="workspace-detail" data-workspace-region="detail">
           {detail}
         </div>
-      ) : null}
+      ) : (
+        <div className="workspace-primary" data-workspace-region="primary">
+          {primary}
+        </div>
+      )}
     </section>
   );
 }

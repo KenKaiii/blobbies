@@ -907,7 +907,10 @@ export function App() {
   // With no Blobs yet, the creator is the only possible view.
   const activeMode: Mode = agent === undefined ? { kind: "creator", initialName: "" } : mode;
 
+  const closeThread = () => setSelectedThreadRoot(null);
+
   const openConversation = (id: string) => {
+    closeThread();
     setSelectedId(id);
     setSelectedGroupId(null);
     setSelectedChannelId(null);
@@ -923,6 +926,7 @@ export function App() {
 
   /** Open a group chat. The details panel is per-Blob, so it closes. */
   const openGroup = (id: string) => {
+    closeThread();
     setSelectedGroupId(id);
     setSelectedChannelId(null);
     setMode({ kind: "chat" });
@@ -999,7 +1003,7 @@ export function App() {
 
   /** Open a channel. Same rules as openGroup: it owns the screen. */
   const openChannel = (id: string) => {
-    setSelectedThreadRoot(null);
+    closeThread();
     setSelectedChannelId(id);
     setSelectedGroupId(null);
     setSelectedId(null);
@@ -1029,6 +1033,22 @@ export function App() {
     const channel = createDirectMessage(member);
     changeChannels([...channelsRef.current, channel]);
     openChannel(channel.id);
+  };
+
+  const deleteChannel = (id: string) => {
+    const next = channelsRef.current.filter((channel) => channel.id !== id);
+    if (next.length === channelsRef.current.length) return;
+    changeChannels(next);
+    if (selectedChannelId === id) {
+      closeThread();
+      const fallback = next[0];
+      if (fallback === undefined) {
+        const visible = agentsRef.current.find((agent) => agent.hidden !== true);
+        if (visible !== undefined) openConversation(visible.id);
+      } else {
+        openChannel(fallback.id);
+      }
+    }
   };
 
   const renameChannel = (id: string, raw: string) => {
@@ -1230,6 +1250,22 @@ export function App() {
       }
     })();
     editBlobProfile(copy.id);
+  };
+
+  const reorderBlobs = (nextIds: string[]) => {
+    const existing = agentsRef.current;
+    if (
+      nextIds.length !== existing.length ||
+      new Set(nextIds).size !== existing.length ||
+      nextIds.some((id) => !existing.some((agent) => agent.id === id))
+    ) {
+      return;
+    }
+    const byId = new Map(existing.map((agent) => [agent.id, agent]));
+    const next = commitAgents(() =>
+      nextIds.map((id) => byId.get(id)).filter((agent): agent is Agent => agent !== undefined),
+    );
+    void store.flushRoster(next);
   };
 
   const deleteBlob = (id: string) => {
@@ -3626,6 +3662,7 @@ export function App() {
         onSelectChannel={openChannel}
         onCreateChannel={createChannel}
         onCreateDirectMessage={createDm}
+        onDeleteChannel={deleteChannel}
         onChangeGroups={changeGroups}
         onRenameGroup={renameGroup}
         composing={composing}
@@ -3633,6 +3670,7 @@ export function App() {
         thinkingIds={thinkingBlobIds}
         activity={activityByBlob}
         onSelect={openConversation}
+        onReorderBlobs={reorderBlobs}
         onStartCompose={() => setMode({ kind: "palette" })}
         onOpenSettings={() => openSettingsModal("general")}
         onOpenPlugins={() => setPluginsOpen(true)}

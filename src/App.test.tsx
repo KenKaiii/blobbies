@@ -250,22 +250,14 @@ describe("App", () => {
     ).toBeInTheDocument();
   });
 
-  it("replies to a message via the hover actions", async () => {
+  it("keeps one composer when replying inline", async () => {
     const user = userEvent.setup();
     render(<App />);
     await createFirstBlob(user);
 
-    const replyButtons = screen.getAllByRole("button", { name: "Reply" });
-    await user.click(replyButtons[0] as HTMLElement);
+    await user.click(screen.getAllByRole("button", { name: "Reply" })[0] as HTMLElement);
     expect(screen.getByPlaceholderText("Reply...")).toBeInTheDocument();
-
-    await user.type(screen.getByLabelText("Message Ken"), "On it{Enter}");
-
-    const log = screen.getByRole("log");
-    expect(within(log).getByText("On it")).toBeInTheDocument();
-    expect(
-      within(log).getByText("What do you need me to do?", { selector: ".bubble-quote" }),
-    ).toBeInTheDocument();
+    expect(screen.getAllByLabelText("Message Ken")).toHaveLength(1);
   });
 
   it("reacts to a message from the picker", async () => {

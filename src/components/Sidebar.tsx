@@ -1,4 +1,6 @@
 import {
+  ArrowDown,
+  ArrowUp,
   ArrowUpCircle,
   Bell,
   ChevronDown,
@@ -88,6 +90,7 @@ interface SidebarProps {
   /** Start a channel; App names it and opens it. */
   onCreateChannel: () => void;
   onCreateDirectMessage?: (agent: Agent) => void;
+  onDeleteChannel: (id: string) => void;
   composing: boolean;
   userName: string;
   /** The Blob whose turn is running; its row and pin tile animate busy. */
@@ -104,6 +107,7 @@ interface SidebarProps {
    */
   activity?: Record<string, BlobActivity>;
   onSelect: (id: string) => void;
+  onReorderBlobs: (nextIds: string[]) => void;
   onStartCompose: () => void;
   onOpenSettings: () => void;
   onOpenPlugins: () => void;
@@ -124,12 +128,14 @@ interface SidebarProps {
 type MenuTarget = { x: number; y: number } & (
   | { kind: "blob"; agentId: string }
   | { kind: "group"; name: string }
+  | { kind: "channel"; channelId: string }
 );
 
 /** Drop zone ids. Sections use `section:<name>`, so these cannot collide. */
 const PIN_ZONE = "pin";
 const UNGROUPED_ZONE = "ungrouped";
 const SECTION_PREFIX = "section:";
+const BLOB_PREFIX = "blob:";
 
 /** The drop zone a group answers to; null is the ungrouped run. */
 function zoneFor(section: string | null): string {
@@ -251,11 +257,13 @@ export function Sidebar({
   onSelectChannel,
   onCreateChannel,
   onCreateDirectMessage,
+  onDeleteChannel,
   composing,
   userName,
   thinkingIds,
   activity,
   onSelect,
+  onReorderBlobs,
   onStartCompose,
   onOpenSettings,
   onOpenPlugins,
@@ -278,7 +286,10 @@ export function Sidebar({
    * only one can be open, so a second copy would be the same markup drifting.
    */
   const [confirmDelete, setConfirmDelete] = useState<
-    { kind: "blob"; agent: Agent } | { kind: "group"; name: string; members: number } | null
+    | { kind: "blob"; agent: Agent }
+    | { kind: "group"; name: string; members: number }
+    | { kind: "channel"; channel: Channel }
+    | null
   >(null);
   /** Hidden Blobs are collapsed behind a toggle — the only way back to one. */
   const [showHidden, setShowHidden] = useState(false);
@@ -402,6 +413,22 @@ export function Sidebar({
     start: startDrag,
     consumeClick,
   } = useBlobDrag((id, zone) => {
+    if (zone.startsWith(BLOB_PREFIX)) {
+      const target = zone.slice(BLOB_PREFIX.length);
+      const next = agents.map((agent) => agent.id).filter((candidate) => candidate !== id);
+      const landing = next.indexOf(target);
+      if (landing === -1) return;
+      next.splice(
+        agents.findIndex((agent) => agent.id === id) <
+          agents.findIndex((agent) => agent.id === target)
+          ? landing + 1
+          : landing,
+        0,
+        id,
+      );
+      onReorderBlobs(next);
+      return;
+    }
     if (zone === PIN_ZONE) {
       onUpdateBlob(id, { pinned: true });
       return;
@@ -482,7 +509,10 @@ export function Sidebar({
 
   const openContextMenu = (
     event: ReactMouseEvent,
-    target: { kind: "blob"; agentId: string } | { kind: "group"; name: string },
+    target:
+      | { kind: "blob"; agentId: string }
+      | { kind: "group"; name: string }
+      | { kind: "channel"; channelId: string },
   ) => {
     event.preventDefault();
     // A right-click inside a group header would otherwise also hit the row
@@ -673,6 +703,7 @@ export function Sidebar({
             .join(" ")}
           aria-current={selected ? "true" : undefined}
           title={collapsed ? agent.name : undefined}
+          data-drop={draggable ? `${BLOB_PREFIX}${agent.id}` : undefined}
           onPointerDown={draggable ? (event) => startDrag(event, agent.id) : undefined}
           onClick={() => {
             // The click that ends a drag must not also select.
@@ -1035,6 +1066,9 @@ export function Sidebar({
               className={showHidden ? "section-slot" : "section-slot section-slot-shut"}
               inert={!showHidden}
             >
+              <p className="hidden-recovery-hint">
+                Right-click a hidden Blob, including Jarvis, then choose Unhide.
+              </p>
               <ul className="agent-group-rows">{hidden.map((agent) => agentRow(agent, false))}</ul>
             </div>
           </li>
@@ -1071,6 +1105,9 @@ export function Sidebar({
                     }
                     aria-current={channel.id === selectedChannelId ? "true" : undefined}
                     onClick={() => onSelectChannel(channel.id)}
+                    onContextMenu={(event) =>
+                      openContextMenu(event, { kind: "channel", channelId: channel.id })
+                    }
                   >
                     <span className="channel-row-name"># {channel.name}</span>
                     {channel.unread === true ? (
@@ -1129,6 +1166,9 @@ export function Sidebar({
                     }
                     aria-current={channel.id === selectedChannelId ? "true" : undefined}
                     onClick={() => onSelectChannel(channel.id)}
+                    onContextMenu={(event) =>
+                      openContextMenu(event, { kind: "channel", channelId: channel.id })
+                    }
                   >
                     <span className="channel-row-name">
                       {agents.find((agent) => agent.id === channel.memberIds[0])?.name ??
@@ -1173,6 +1213,10 @@ export function Sidebar({
           const target =
             contextMenu.kind === "blob"
               ? agents.find((candidate) => candidate.id === contextMenu.agentId)
+              : undefined;
+          const room =
+            contextMenu.kind === "channel"
+              ? channels.find((candidate) => candidate.id === contextMenu.channelId)
               : undefined;
           if (contextMenu.kind === "blob" && target === undefined) {
             return null;
@@ -1221,6 +1265,14 @@ export function Sidebar({
                 style={{ left: contextMenu.x, top: contextMenu.y }}
                 onClick={(event) => event.stopPropagation()}
               >
+                {room === undefined
+                  ? null
+                  : item(
+                      room.kind === "dm" ? "Delete direct message" : "Delete channel",
+                      <Trash2 size={15} strokeWidth={1.8} aria-hidden="true" />,
+                      () => setConfirmDelete({ kind: "channel", channel: room }),
+                      true,
+                    )}
                 {contextMenu.kind === "group" ? (
                   <>
                     {item(
@@ -1254,6 +1306,27 @@ export function Sidebar({
                 ) : null}
                 {target === undefined ? null : (
                   <>
+                    {item(
+                      "Move up",
+                      <ArrowUp size={15} strokeWidth={1.8} aria-hidden="true" />,
+                      () => {
+                        const ids = agents.map((agent) => agent.id);
+                        const index = ids.indexOf(target.id);
+                        if (index > 0) ids.splice(index - 1, 0, ...ids.splice(index, 1));
+                        onReorderBlobs(ids);
+                      },
+                    )}
+                    {item(
+                      "Move down",
+                      <ArrowDown size={15} strokeWidth={1.8} aria-hidden="true" />,
+                      () => {
+                        const ids = agents.map((agent) => agent.id);
+                        const index = ids.indexOf(target.id);
+                        if (index >= 0 && index < ids.length - 1)
+                          ids.splice(index + 1, 0, ...ids.splice(index, 1));
+                        onReorderBlobs(ids);
+                      },
+                    )}
                     {target.pinned === true
                       ? item(
                           "Unpin",
@@ -1340,7 +1413,9 @@ export function Sidebar({
             aria-label={
               confirmDelete.kind === "blob"
                 ? `Delete ${confirmDelete.agent.name}`
-                : `Delete group ${confirmDelete.name}`
+                : confirmDelete.kind === "group"
+                  ? `Delete group ${confirmDelete.name}`
+                  : `Delete ${confirmDelete.channel.kind === "dm" ? "direct message" : "channel"} ${confirmDelete.channel.name}`
             }
             tabIndex={-1}
             onKeyDown={(event) => {
@@ -1350,21 +1425,24 @@ export function Sidebar({
             }}
           >
             <h2 className="confirm-title">{`Delete “${
-              confirmDelete.kind === "blob" ? confirmDelete.agent.name : confirmDelete.name
+              confirmDelete.kind === "blob"
+                ? confirmDelete.agent.name
+                : confirmDelete.kind === "group"
+                  ? confirmDelete.name
+                  : confirmDelete.channel.name
             }”`}</h2>
             <p className="confirm-body">
               {confirmDelete.kind === "blob"
                 ? "Deletes this Blob and its chat. Files stay in the trash folder for 30 days."
-                : // Naming the count is the whole warning: the members are not
-                  // deleted, but they do leave the group, and from a collapsed
-                  // header the user cannot see how many that is.
-                  `Deletes this group chat.${
-                    confirmDelete.members === 0
-                      ? ""
-                      : ` Its ${confirmDelete.members} ${
-                          confirmDelete.members === 1 ? "Blob" : "Blobs"
-                        } move out, and are kept.`
-                  }`}
+                : confirmDelete.kind === "channel"
+                  ? `Removes this ${confirmDelete.channel.kind === "dm" ? "direct message" : "channel"} from the sidebar. Its transcript is kept.`
+                  : `Deletes this group chat.${
+                      confirmDelete.members === 0
+                        ? ""
+                        : ` Its ${confirmDelete.members} ${
+                            confirmDelete.members === 1 ? "Blob" : "Blobs"
+                          } move out, and are kept.`
+                    }`}
             </p>
             <div className="confirm-actions">
               <button type="button" className="modal-button" onClick={() => setConfirmDelete(null)}>
@@ -1378,8 +1456,10 @@ export function Sidebar({
                 onClick={() => {
                   if (confirmDelete.kind === "blob") {
                     onDelete(confirmDelete.agent.id);
-                  } else {
+                  } else if (confirmDelete.kind === "group") {
                     removeSection(confirmDelete.name);
+                  } else {
+                    onDeleteChannel(confirmDelete.channel.id);
                   }
                   setConfirmDelete(null);
                 }}
