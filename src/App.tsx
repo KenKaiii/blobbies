@@ -78,7 +78,6 @@ import { type McpServerConfig, parseLoopbackUrl } from "@/lib/mcp-config";
 import { modelSeesImages } from "@/lib/model-vision";
 import { notify, shouldNotify } from "@/lib/notify";
 import { unloadOllamaModel } from "@/lib/ollama";
-import { isOpenRouterModel } from "@/lib/openrouter-model";
 import { readPreference, useLabFlag, writePreference } from "@/lib/preferences";
 import { imagePreview } from "@/lib/preview";
 import { blobSystemPrompt, configFieldEmpty, splitHistory, timeNote } from "@/lib/prompt";
@@ -563,15 +562,16 @@ export function App() {
   useEffect(() => {
     let cancelled = false;
     void (async () => {
-      const [roster, settings, shared, savedGroups, savedChannels, acpSettings] =
-        await Promise.all([
+      const [roster, settings, shared, savedGroups, savedChannels, acpSettings] = await Promise.all(
+        [
           store.loadRoster(),
           store.loadSettings(),
           store.loadUserMemories(),
           store.loadGroups(),
           store.loadChannels(),
           store.loadAcpSettings(),
-        ]);
+        ],
+      );
       if (cancelled) {
         return;
       }

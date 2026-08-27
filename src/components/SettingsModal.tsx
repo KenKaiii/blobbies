@@ -12,8 +12,6 @@ import {
   type OllamaModel,
   startOllama,
 } from "@/lib/ollama";
-import type { OpenRouterModel } from "@/lib/openrouter";
-import { isOpenRouterModel, OPENROUTER_MODEL_PREFIX } from "@/lib/openrouter-model";
 import type { LabFlagName } from "@/lib/preferences";
 import { deleteSecret, setSecret } from "@/lib/secrets";
 import { listSkills, type Skill } from "@/lib/skills";
