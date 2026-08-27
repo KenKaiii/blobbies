@@ -19,6 +19,7 @@ import { SettingsPanel } from "@/components/SettingsPanel";
 import { Sidebar } from "@/components/Sidebar";
 import { SlidePanel } from "@/components/SlidePanel";
 import { ThreadPane } from "@/components/ThreadPane";
+import { WorkspaceLayout } from "@/components/WorkspaceLayout";
 import {
   type Agent,
   type AgentShape,
@@ -998,6 +999,7 @@ export function App() {
 
   /** Open a channel. Same rules as openGroup: it owns the screen. */
   const openChannel = (id: string) => {
+    setSelectedThreadRoot(null);
     setSelectedChannelId(id);
     setSelectedGroupId(null);
     setSelectedId(null);
@@ -1027,6 +1029,27 @@ export function App() {
     const channel = createDirectMessage(member);
     changeChannels([...channelsRef.current, channel]);
     openChannel(channel.id);
+  };
+
+  const renameChannel = (id: string, raw: string) => {
+    const name = raw.trim().slice(0, MAX_BLOB_NAME_LENGTH);
+    const channel = channelsRef.current.find((candidate) => candidate.id === id);
+    if (
+      channel === undefined ||
+      channel.kind === "dm" ||
+      name === "" ||
+      name === channel.name ||
+      [...channelsRef.current, ...groupsRef.current].some(
+        (room) => room.id !== id && room.name.toLowerCase() === name.toLowerCase(),
+      )
+    ) {
+      return;
+    }
+    changeChannels(
+      channelsRef.current.map((candidate) =>
+        candidate.id === id ? { ...candidate, name } : candidate,
+      ),
+    );
   };
 
   const createChannel = () => {
@@ -3643,69 +3666,78 @@ export function App() {
       agent !== undefined ? (
         (() => {
           const members = channelMembers(selectedChannel);
-          const speaking = members.find((member) => member.id === thinkingFor);
+          const channelConvoId = channelConversationId(selectedChannel.id);
+          const speaking = members.find((member) => member.id === thinkingFor[channelConvoId]);
           return (
-            <div className="channel-thread-layout">
-              <ChannelPane
-                channel={selectedChannel}
-                members={members}
-                messages={sentByAgent[channelConversationId(selectedChannel.id)] ?? []}
-                notSaving={unsavedKeys.has(
-                  store.conversationSliceKey(channelConversationId(selectedChannel.id)),
-                )}
-                thinking={speaking !== undefined}
-                {...(speaking === undefined ? {} : { thinkingAgent: speaking })}
-                model={model}
-                onModelChange={changeModel}
-                reasoning={reasoning}
-                onReasoningChange={changeReasoning}
-                onSend={sendMessage}
-                onStop={stopTurn}
-                onOpenThread={(message) => setSelectedThreadRoot(message)}
-                threadReplyCounts={selectedChannel.threadReplyCounts ?? {}}
-                onOpenSettings={openSettings}
-              />
-              {selectedThreadRoot === null ? null : (
-                <ThreadPane
-                  root={selectedThreadRoot}
+            <WorkspaceLayout
+              primary={
+                <ChannelPane
+                  channel={selectedChannel}
                   members={members}
-                  messages={
-                    sentByAgent[threadConversationId(selectedChannel.id, selectedThreadRoot.id)] ??
-                    []
-                  }
+                  onRenameChannel={(name) => renameChannel(selectedChannel.id, name)}
+                  messages={sentByAgent[channelConversationId(selectedChannel.id)] ?? []}
+                  notSaving={unsavedKeys.has(
+                    store.conversationSliceKey(channelConversationId(selectedChannel.id)),
+                  )}
                   thinking={speaking !== undefined}
                   {...(speaking === undefined ? {} : { thinkingAgent: speaking })}
                   model={model}
                   onModelChange={changeModel}
                   reasoning={reasoning}
                   onReasoningChange={changeReasoning}
-                  onSend={(text, reply = {}) => {
-                    const conversationId = threadConversationId(
-                      selectedChannel.id,
-                      selectedThreadRoot.id,
-                    );
-                    const before = sentRef.current[conversationId]?.length ?? 0;
-                    sendToThread(selectedChannel, selectedThreadRoot, text, reply);
-                    changeChannels(
-                      channelsRef.current.map((entry) =>
-                        entry.id === selectedChannel.id
-                          ? {
-                              ...entry,
-                              threadReplyCounts: {
-                                ...entry.threadReplyCounts,
-                                [selectedThreadRoot.id]: before + 1,
-                              },
-                            }
-                          : entry,
-                      ),
-                    );
-                  }}
-                  onStop={stopTurn}
-                  onClose={() => setSelectedThreadRoot(null)}
+                  onSend={sendMessage}
+                  onStop={() => stopTurn(channelConvoId)}
+                  onOpenThread={(message) => setSelectedThreadRoot(message)}
+                  threadReplyCounts={selectedChannel.threadReplyCounts ?? {}}
                   onOpenSettings={openSettings}
                 />
-              )}
-            </div>
+              }
+              detail={
+                selectedThreadRoot === null ? undefined : (
+                  <ThreadPane
+                    root={selectedThreadRoot}
+                    members={members}
+                    messages={
+                      sentByAgent[
+                        threadConversationId(selectedChannel.id, selectedThreadRoot.id)
+                      ] ?? []
+                    }
+                    thinking={speaking !== undefined}
+                    {...(speaking === undefined ? {} : { thinkingAgent: speaking })}
+                    model={model}
+                    onModelChange={changeModel}
+                    reasoning={reasoning}
+                    onReasoningChange={changeReasoning}
+                    onSend={(text, reply = {}) => {
+                      const conversationId = threadConversationId(
+                        selectedChannel.id,
+                        selectedThreadRoot.id,
+                      );
+                      const before = sentRef.current[conversationId]?.length ?? 0;
+                      sendToThread(selectedChannel, selectedThreadRoot, text, reply);
+                      changeChannels(
+                        channelsRef.current.map((entry) =>
+                          entry.id === selectedChannel.id
+                            ? {
+                                ...entry,
+                                threadReplyCounts: {
+                                  ...entry.threadReplyCounts,
+                                  [selectedThreadRoot.id]: before + 1,
+                                },
+                              }
+                            : entry,
+                        ),
+                      );
+                    }}
+                    onStop={() =>
+                      stopTurn(threadConversationId(selectedChannel.id, selectedThreadRoot.id))
+                    }
+                    onClose={() => setSelectedThreadRoot(null)}
+                    onOpenSettings={openSettings}
+                  />
+                )
+              }
+            />
           );
         })()
       ) : activeMode.kind === "chat" &&
@@ -3714,7 +3746,7 @@ export function App() {
         selectedGroup === undefined ? (
         <section className="labs-pane" aria-label="Channels (Labs)">
           <header className="labs-pane-header" data-tauri-drag-region>
-            Channels — pick one, or start a new channel in the sidebar
+            Pick a channel or start one in the sidebar
           </header>
         </section>
       ) : null}

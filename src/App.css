@@ -4018,23 +4018,39 @@ a.modal-button {
   transition: border-color var(--duration-compose) var(--ease-standard);
 }
 
-.channel-thread-layout {
+.workspace-layout {
+  container-type: inline-size;
   display: flex;
   min-width: 0;
   flex: 1;
 }
 
-.channel-thread-layout > .chat-pane {
+.workspace-primary,
+.workspace-detail {
+  display: flex;
   min-width: 0;
+}
+
+.workspace-primary {
   flex: 1;
+}
+
+.workspace-detail {
+  width: clamp(340px, 38cqw, 480px);
+  border-inline-start: 1px solid var(--border-subtle);
 }
 
 .thread-pane {
-  width: min(360px, 38vw);
-  border-left: 1px solid var(--border-subtle);
+  min-width: 0;
   background: var(--surface-primary);
   display: flex;
   flex-direction: column;
+}
+
+.workspace-primary > .chat-pane,
+.workspace-detail > .thread-pane {
+  min-width: 0;
+  flex: 1;
 }
 
 .thread-pane > .chat-pane {
@@ -4046,8 +4062,89 @@ a.modal-button {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 12px;
+  min-height: 48px;
+  padding-inline: 12px;
   border-bottom: 1px solid var(--border-subtle);
+}
+
+.thread-pane-header h2 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.thread-pane-header .icon-button {
+  width: auto;
+  min-width: 44px;
+  min-height: 44px;
+  padding-inline: 10px;
+  gap: 6px;
+}
+
+.thread-action-label-back,
+.thread-back-icon {
+  display: none;
+}
+
+.chat-compact-settings {
+  position: relative;
+  display: block;
+}
+
+.chat-compact-settings-menu {
+  position: absolute;
+  margin: 0;
+  z-index: 20;
+  inset-block-start: calc(100% + 8px);
+  inset-inline-end: 0;
+  display: grid;
+  gap: 8px;
+  width: min(260px, calc(100vw - 32px));
+  padding: 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 14px;
+  background: var(--surface-primary);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+}
+
+.chat-compact-settings-menu > div {
+  display: grid;
+  gap: 8px;
+}
+
+.chat-compact-settings-menu legend {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.chat-compact-settings-menu .pill-select,
+.chat-compact-settings-menu .pill-select select {
+  width: 100%;
+  max-width: none;
+}
+
+@container (max-width: 760px) {
+  .workspace-layout[data-detail-open="true"] > .workspace-primary {
+    display: none;
+  }
+
+  .workspace-detail {
+    width: 100%;
+    border-inline-start: 0;
+  }
+
+  .thread-action-label-close,
+  .thread-close-icon {
+    display: none;
+  }
+
+  .thread-action-label-back,
+  .thread-back-icon {
+    display: inline;
+  }
 }
 
 .thread-root {
@@ -6568,11 +6665,51 @@ a.modal-button {
   user-select: none;
 }
 
-/* Channels (Labs). A flat room list under the Blob sections: membership is
-   an id list each channel owns, so there are no rows nested under it. */
+/* Channels and DMs share the sidebar's existing section and row geometry. */
 .channel-list {
-  padding: 4px 0 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-block: 10px 6px;
   border-top: 1px solid var(--border-subtle);
+}
+
+.channel-list .section-header {
+  min-height: 32px;
+}
+
+.channel-section-title {
+  min-width: 0;
+  padding-inline: 12px 36px;
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.channel-section-add {
+  position: absolute;
+  inset-inline-end: 6px;
+  top: 50%;
+  display: grid;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border-radius: 8px;
+  color: var(--text-secondary);
+  place-items: center;
+  transform: translateY(-50%);
+  transition:
+    background-color var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard);
+}
+
+.channel-section-add:hover,
+.channel-section-add[aria-expanded="true"] {
+  background: var(--hover-overlay);
+  color: var(--text-primary);
 }
 
 .channel-row {
@@ -6580,22 +6717,27 @@ a.modal-button {
   align-items: center;
   gap: 8px;
   width: 100%;
-  padding: 6px 12px;
-  border: 0;
-  background: none;
+  min-height: 36px;
+  box-sizing: border-box;
+  padding: 7px 12px;
+  border-radius: 10px;
+  color: var(--text-secondary);
   font: inherit;
   font-size: 13px;
-  color: var(--text-secondary);
-  text-align: left;
-  cursor: pointer;
+  text-align: start;
+  transition:
+    background-color var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard);
 }
 
 .channel-row:hover {
-  background: var(--surface-hover);
+  background: var(--hover-overlay);
+  color: var(--text-primary);
 }
 
-.channel-row-open {
-  background: var(--surface-active);
+.channel-row-open,
+.channel-row-open:hover {
+  background: var(--surface-selected);
   color: var(--text-primary);
 }
 

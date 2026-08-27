@@ -575,6 +575,26 @@ describe("App", () => {
     expect(screen.queryByRole("region", { name: "Channels (Labs)" })).not.toBeInTheDocument();
   });
 
+  it("creates one channel composer and persists channel renames", async () => {
+    window.localStorage.setItem("pref:labs.channels", "on");
+    await flushRoster([seedBlob(1, "Ken")]);
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: "New channel" }));
+    expect(screen.getAllByRole("textbox", { name: /Message new-channel/ })).toHaveLength(1);
+
+    const name = screen.getByRole("textbox", { name: "Group name" });
+    await user.clear(name);
+    await user.type(name, "launch{Enter}");
+    expect(screen.getByRole("textbox", { name: "Group name" })).toHaveValue("launch");
+    await expect(
+      (await import("@/lib/store"))
+        .loadChannels()
+        .then((channels) => channels?.some((channel) => channel.name === "launch")),
+    ).resolves.toBe(true);
+  });
+
   it("imports group chats as channels when the Channels lab is first enabled", async () => {
     // A pre-existing group (via the legacy sections migration path) and the
     // flag already on at launch: the group must survive untouched while a

@@ -71,6 +71,37 @@ const endPop = (target: Element, animationName = "message-jelly") => {
 };
 
 describe("ChatPane", () => {
+  it("offers compact settings and suppresses embedded identity chrome", async () => {
+    render(
+      <ChatPane
+        agent={agent}
+        group={{ id: "thread", name: "Thread", members: [agent] }}
+        headerMode="embedded"
+        messages={[]}
+        model="llama"
+        onModelChange={() => {}}
+        reasoning={false}
+        onReasoningChange={() => {}}
+        onSend={() => {}}
+        detailOpen={false}
+        onToggleDetail={() => {}}
+        onOpenSettings={() => {}}
+      />,
+    );
+
+    expect(screen.queryByRole("textbox", { name: "Group name" })).not.toBeInTheDocument();
+    const settings = screen.getByRole("button", { name: "Conversation settings" });
+    expect(settings).toHaveAttribute("aria-expanded", "false");
+    await userEvent.click(settings);
+    expect(settings).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getAllByRole("combobox", { name: "Thinking" })).toHaveLength(1);
+    expect(screen.getAllByRole("combobox", { name: "Model" })).toHaveLength(1);
+    fireEvent.keyDown(screen.getByRole("group", { name: "Conversation settings" }), {
+      key: "Escape",
+    });
+    expect(settings).toHaveFocus();
+  });
+
   it("uses persistent thread actions and counts only when requested", async () => {
     const onOpenThread = vi.fn();
     const { rerender } = render(pane(false, vi.fn(), [messages[0] as Message]));

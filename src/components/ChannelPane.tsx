@@ -6,12 +6,11 @@ import type { Channel } from "@/lib/channels";
  * A channel (Labs) on screen. ChatPane already knows how to render a shared
  * transcript — @mentions, per-speaker bubbles, the composer — so a channel is
  * a group-shaped room whose membership the channel owns (see lib/channels).
- * No rename yet: a group's rename moves its members' `section`, a channel's
- * would touch only itself, and that affordance arrives with member editing.
  */
 export function ChannelPane(props: {
   channel: Channel;
   members: readonly Agent[];
+  onRenameChannel: (name: string) => void;
   messages: Message[];
   notSaving?: boolean;
   thinking?: boolean;
@@ -55,6 +54,7 @@ export function ChannelPane(props: {
             : props.channel.name,
         members: props.members,
       }}
+      onRenameGroup={props.channel.kind === "channel" ? props.onRenameChannel : undefined}
       messages={props.messages}
       {...(props.notSaving === undefined ? {} : { notSaving: props.notSaving })}
       {...(props.thinking === undefined ? {} : { thinking: props.thinking })}

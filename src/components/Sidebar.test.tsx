@@ -79,7 +79,11 @@ describe("a running Blob's row", () => {
 
     expect(screen.getByText("Direct messages")).toBeTruthy();
     expect(screen.getAllByText("Ken").length).toBeGreaterThan(1);
-    await userEvent.click(screen.getByRole("button", { name: "New direct message" }));
+    const newDirectMessage = screen.getByRole("button", { name: "New direct message" });
+    expect(newDirectMessage.querySelector("svg")).toBeTruthy();
+    expect(newDirectMessage).toHaveAttribute("aria-expanded", "false");
+    await userEvent.click(newDirectMessage);
+    expect(newDirectMessage).toHaveAttribute("aria-expanded", "true");
     await userEvent.click(
       within(screen.getByRole("dialog", { name: "New direct message" })).getByRole("button", {
         name: "Ken",

@@ -1,4 +1,5 @@
-import { X } from "lucide-react";
+import { ArrowLeft, X } from "lucide-react";
+import { useEffect, useRef } from "react";
 import { ChatPane } from "@/components/ChatPane";
 import type { Agent, Message } from "@/data/agents";
 
@@ -18,18 +19,25 @@ export function ThreadPane(props: {
   onOpenSettings: () => void;
 }) {
   const speaker = props.members[0];
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  useEffect(() => headingRef.current?.focus(), []);
   if (speaker === undefined) return null;
   return (
-    <aside className="thread-pane" aria-label="Thread">
+    <aside className="thread-pane" aria-labelledby="thread-pane-title">
       <header className="thread-pane-header">
-        <strong>Thread</strong>
+        <h2 id="thread-pane-title" ref={headingRef} tabIndex={-1}>
+          Thread
+        </h2>
         <button
           type="button"
           className="icon-button"
           aria-label="Close thread"
           onClick={props.onClose}
         >
-          <X size={16} aria-hidden="true" />
+          <ArrowLeft className="thread-back-icon" size={16} aria-hidden="true" />
+          <X className="thread-close-icon" size={16} aria-hidden="true" />
+          <span className="thread-action-label thread-action-label-back">Back to channel</span>
+          <span className="thread-action-label thread-action-label-close">Close</span>
         </button>
       </header>
       <div className="thread-root" data-message-id={props.root.id}>
@@ -44,6 +52,7 @@ export function ThreadPane(props: {
         model={props.model}
         onModelChange={props.onModelChange}
         reasoning={props.reasoning}
+        headerMode="embedded"
         onReasoningChange={props.onReasoningChange}
         onSend={props.onSend}
         {...(props.onStop === undefined ? {} : { onStop: props.onStop })}

@@ -1047,14 +1047,14 @@ export function Sidebar({
       {channelsVisible || channels.length > 0 || selectedChannelId !== null ? (
         <div className="channel-list">
           <div className="section-header">
-            <span className="section-name">Channels</span>
+            <span className="channel-section-title">Channels</span>
             <button
               type="button"
-              className="section-remove"
+              className="channel-section-add"
               aria-label="New channel"
               onClick={onCreateChannel}
             >
-              +
+              <Plus size={15} strokeWidth={2} aria-hidden="true" />
             </button>
           </div>
           <ul className="agent-group-rows">
@@ -1086,15 +1086,15 @@ export function Sidebar({
               ))}
           </ul>
           <div className="section-header">
-            <span className="section-name">Direct messages</span>
+            <span className="channel-section-title">Direct messages</span>
             <button
               type="button"
-              className="section-remove"
+              className="channel-section-add"
               aria-label="New direct message"
               aria-expanded={dmPickerOpen}
               onClick={() => setDmPickerOpen((open) => !open)}
             >
-              +
+              <Plus size={15} strokeWidth={2} aria-hidden="true" />
             </button>
           </div>
           {dmPickerOpen ? (

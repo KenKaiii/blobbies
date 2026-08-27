@@ -8,6 +8,7 @@ import {
   Image as ImageIcon,
   Monitor,
   Plus,
+  Settings2,
   Smile,
   Square,
   TriangleAlert,
@@ -20,6 +21,7 @@ import {
   type ReactNode,
   useCallback,
   useEffect,
+  useId,
   useLayoutEffect,
   useMemo,
   useReducer,
@@ -90,6 +92,8 @@ interface ChatPaneProps {
   onModelChange: (model: string) => void;
   /** Whether the model may use chain-of-thought (slower, deeper). */
   reasoning: boolean;
+  /** Embedded detail panes supply their own identity header. */
+  headerMode?: "full" | "embedded";
   onReasoningChange: (on: boolean) => void;
   /** Files ride along with the message; the app saves them to the Blob's home. */
   onSend: (
@@ -597,6 +601,7 @@ export function ChatPane({
   model,
   onModelChange,
   reasoning,
+  headerMode = "full",
   onReasoningChange,
   onSend,
   onStop,
@@ -610,6 +615,9 @@ export function ChatPane({
   teaching,
 }: ChatPaneProps) {
   const [draft, setDraft] = useState("");
+  const controlId = useId();
+  const [compactSettingsOpen, setCompactSettingsOpen] = useState(false);
+  const compactSettingsRef = useRef<HTMLDivElement>(null);
   /**
    * Every conversation's unsent draft, as last written to disk. A ref, not
    * state: nothing on screen reads the other conversations' drafts, and this
@@ -1654,6 +1662,17 @@ export function ChatPane({
     }
   };
 
+  useEffect(() => {
+    if (!compactSettingsOpen) return;
+    const close = (event: PointerEvent) => {
+      if (!compactSettingsRef.current?.contains(event.target as Node)) {
+        setCompactSettingsOpen(false);
+      }
+    };
+    window.addEventListener("pointerdown", close);
+    return () => window.removeEventListener("pointerdown", close);
+  }, [compactSettingsOpen]);
+
   return (
     <section
       className="chat-pane"
@@ -1672,128 +1691,144 @@ export function ChatPane({
             between, so there is nothing for CSS to interpolate. Not keyed on
             the group's NAME — that would restart the animation on every
             keystroke of a rename, mid-edit. */}
-        <div className="chat-header-swap">
-          {leaving === null ? null : (
-            // aria-hidden and inert: a screen reader announcing the conversation
-            // you just left, or a tab stop landing on it, is worse than no
-            // animation at all. It is a picture of the old header, nothing more.
-            <div
-              key={leaving.key}
-              className={
-                leaving.solo
-                  ? "chat-header-identity identity-button chat-header-identity-leaving"
-                  : "chat-header-identity chat-header-identity-leaving"
-              }
-              aria-hidden="true"
-            >
-              <span className="chat-group-faces">
-                {leaving.faces.map((face) => (
-                  <BlobAvatar key={face.id} tone={face.tone} shape={face.shape} size={24} />
-                ))}
-              </span>
-              {/* An h1 like the live title, not a span: a different element
+        {headerMode === "embedded" ? null : (
+          <div className="chat-header-swap">
+            {leaving === null ? null : (
+              // aria-hidden and inert: a screen reader announcing the conversation
+              // you just left, or a tab stop landing on it, is worse than no
+              // animation at all. It is a picture of the old header, nothing more.
+              <div
+                key={leaving.key}
+                className={
+                  leaving.solo
+                    ? "chat-header-identity identity-button chat-header-identity-leaving"
+                    : "chat-header-identity chat-header-identity-leaving"
+                }
+                aria-hidden="true"
+              >
+                <span className="chat-group-faces">
+                  {leaving.faces.map((face) => (
+                    <BlobAvatar key={face.id} tone={face.tone} shape={face.shape} size={24} />
+                  ))}
+                </span>
+                {/* An h1 like the live title, not a span: a different element
                   means a different line box, and the ghost's text would sit a
                   pixel off its replacement's — leaving a sliver where both are
                   visible at once instead of one clean cut. */}
-              <h1 className="chat-title">{leaving.name}</h1>
-              {leaving.count === null ? null : (
-                <span className="chat-group-count">{leaving.count}</span>
-              )}
-            </div>
-          )}
-          {group === undefined ? (
-            <button
-              key={agent.id}
-              type="button"
-              className="chat-header-identity identity-button"
-              aria-label={`${agent.name} settings`}
-              onClick={onOpenSettings}
-            >
-              <BlobAvatar tone={agent.tone} shape={agent.shape} size={24} />
-              <h1 className="chat-title">{agent.name}</h1>
-            </button>
-          ) : (
-            <div key={group.id} className="chat-header-identity">
-              <span className="chat-group-faces" aria-hidden="true">
-                {group.members.slice(0, 3).map((member) => (
-                  <BlobAvatar key={member.id} tone={member.tone} shape={member.shape} size={24} />
-                ))}
-              </span>
-              {/* The title is the rename field: there is nowhere else to edit
+                <h1 className="chat-title">{leaving.name}</h1>
+                {leaving.count === null ? null : (
+                  <span className="chat-group-count">{leaving.count}</span>
+                )}
+              </div>
+            )}
+            {group === undefined ? (
+              <button
+                key={agent.id}
+                type="button"
+                className="chat-header-identity identity-button"
+                aria-label={`${agent.name} settings`}
+                onClick={onOpenSettings}
+              >
+                <BlobAvatar tone={agent.tone} shape={agent.shape} size={24} />
+                <h1 className="chat-title">{agent.name}</h1>
+              </button>
+            ) : (
+              <div key={group.id} className="chat-header-identity">
+                <span className="chat-group-faces" aria-hidden="true">
+                  {group.members.slice(0, 3).map((member) => (
+                    <BlobAvatar key={member.id} tone={member.tone} shape={member.shape} size={24} />
+                  ))}
+                </span>
+                {/* The title is the rename field: there is nowhere else to edit
                 it, and a name nobody can change stays "New Group" forever.
                 Commit on blur or Enter; Escape abandons the edit. */}
-              <input
-                className="chat-title chat-title-input"
-                aria-label="Group name"
-                value={nameDraft ?? group.name}
-                maxLength={MAX_BLOB_NAME_LENGTH}
-                onChange={(event) => editName(event.currentTarget.value)}
-                onBlur={() => {
-                  if (nameDraftRef.current !== null) {
-                    onRenameGroup?.(nameDraftRef.current);
-                  }
-                  editName(null);
-                }}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") {
-                    event.preventDefault();
-                    event.currentTarget.blur();
-                  } else if (event.key === "Escape") {
+                <input
+                  className="chat-title chat-title-input"
+                  aria-label="Group name"
+                  value={nameDraft ?? group.name}
+                  maxLength={MAX_BLOB_NAME_LENGTH}
+                  onChange={(event) => editName(event.currentTarget.value)}
+                  onBlur={() => {
+                    if (nameDraftRef.current !== null) {
+                      onRenameGroup?.(nameDraftRef.current);
+                    }
                     editName(null);
-                    event.currentTarget.blur();
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      event.currentTarget.blur();
+                    } else if (event.key === "Escape") {
+                      editName(null);
+                      event.currentTarget.blur();
+                    }
+                  }}
+                />
+                <span className="chat-group-count">
+                  {group.members.length === 1 ? "1 Blob" : `${group.members.length} Blobs`}
+                </span>
+              </div>
+            )}
+          </div>
+        )}
+        <div className="chat-header-controls">
+          <div className="chat-compact-settings" ref={compactSettingsRef}>
+            <button
+              type="button"
+              className="icon-button chat-compact-settings-button"
+              aria-label="Conversation settings"
+              aria-expanded={compactSettingsOpen}
+              aria-controls={`${controlId}-compact-settings`}
+              onClick={() => setCompactSettingsOpen((open) => !open)}
+            >
+              <Settings2 size={17} strokeWidth={1.8} aria-hidden="true" />
+            </button>
+            {compactSettingsOpen ? (
+              <fieldset
+                id={`${controlId}-compact-settings`}
+                className="chat-compact-settings-menu"
+                onKeyDown={(event) => {
+                  if (event.key === "Escape") {
+                    setCompactSettingsOpen(false);
+                    compactSettingsRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
                   }
                 }}
-              />
-              <span className="chat-group-count">
-                {group.members.length === 1 ? "1 Blob" : `${group.members.length} Blobs`}
-              </span>
-            </div>
-          )}
-        </div>
-        <div className="chat-header-controls">
-          <PillSelect
-            id="header-thinking"
-            label="Thinking"
-            value={reasoning ? "on" : "off"}
-            onChange={(value) => onReasoningChange(value === "on")}
-          >
-            <option value="off">Thinking off</option>
-            <option value="on">Thinking on</option>
-          </PillSelect>
-          {/* Re-read the list as the menu opens: it may have been empty at
-              mount (Ollama still starting) or gone stale since. */}
-          <PillSelect
-            id="header-model"
-            label="Model"
-            value={model}
-            onChange={onModelChange}
-            onOpen={refreshModels}
-          >
-            <option value="">Choose a model</option>
-            {model !== "" &&
-            !availableModels.some((entry) => entry.name === model) &&
-            !tinfoilModels.some((entry) => `${TINFOIL_MODEL_PREFIX}${entry.id}` === model) ? (
-              <option value={model}>{model}</option>
+              >
+                <legend className="sr-only">Conversation settings</legend>
+                <div>
+                  <PillSelect
+                    id={`${controlId}-compact-thinking`}
+                    label="Thinking"
+                    value={reasoning ? "on" : "off"}
+                    onChange={(value) => onReasoningChange(value === "on")}
+                  >
+                    <option value="off">Thinking off</option>
+                    <option value="on">Thinking on</option>
+                  </PillSelect>
+                  <PillSelect
+                    id={`${controlId}-compact-model`}
+                    label="Model"
+                    value={model}
+                    onChange={onModelChange}
+                    onOpen={refreshModels}
+                  >
+                    <option value="">Choose a model</option>
+                    {model === "" ? null : <option value={model}>{model}</option>}
+                    {availableModels.map((entry) => (
+                      <option key={entry.name} value={entry.name}>
+                        {entry.name}
+                      </option>
+                    ))}
+                    {tinfoilModels.map((entry) => (
+                      <option key={entry.id} value={`${TINFOIL_MODEL_PREFIX}${entry.id}`}>
+                        {entry.name}
+                      </option>
+                    ))}
+                  </PillSelect>
+                </div>
+              </fieldset>
             ) : null}
-            {availableModels.length > 0 ? (
-              <optgroup label="Ollama — local">
-                {availableModels.map((entry) => (
-                  <option key={entry.name} value={entry.name}>
-                    {entry.name}
-                  </option>
-                ))}
-              </optgroup>
-            ) : null}
-            {tinfoilModels.length > 0 ? (
-              <optgroup label="Tinfoil — private cloud">
-                {tinfoilModels.map((entry) => (
-                  <option key={entry.id} value={`${TINFOIL_MODEL_PREFIX}${entry.id}`}>
-                    {entry.name}
-                  </option>
-                ))}
-              </optgroup>
-            ) : null}
-          </PillSelect>
+          </div>
           {/* The details panel is one Blob's memories, files and routines —
               there is no group-wide version of it. */}
           {onTeach === undefined ? null : (
