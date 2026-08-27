@@ -28,6 +28,7 @@ import {
 import { BlobAvatar } from "@/components/BlobAvatar";
 import { type Agent, MAX_BLOB_NAME_LENGTH, MAX_BLOBS } from "@/data/agents";
 import { activityLabel, type BlobActivity } from "@/lib/activity";
+import { type Channel, MAX_CHANNEL_MEMBERS } from "@/lib/channels";
 import { type Group, MAX_GROUP_MEMBERS } from "@/lib/groups";
 import { readPreference, writePreference } from "@/lib/preferences";
 import { isTauri } from "@/lib/tauri";
@@ -77,6 +78,15 @@ interface SidebarProps {
   onChangeGroups: (next: Group[]) => void;
   /** Rename a group and move its members; owned by App, which persists both. */
   onRenameGroup: (id: string, name: string) => void;
+  /** Channels (Labs), if enabled — else empty and the section is hidden. */
+  channels?: Channel[];
+  /** True when the channels lab is on, so the section (and its add button)
+   * shows even before the first channel exists. */
+  channelsVisible?: boolean;
+  selectedChannelId?: string | null;
+  onSelectChannel: (id: string) => void;
+  /** Start a channel; App names it and opens it. */
+  onCreateChannel: () => void;
   composing: boolean;
   userName: string;
   /** The Blob whose turn is running; its row and pin tile animate busy. */
@@ -234,6 +244,11 @@ export function Sidebar({
   onSelectGroup,
   onChangeGroups,
   onRenameGroup,
+  channels = [],
+  channelsVisible = false,
+  selectedChannelId = null,
+  onSelectChannel,
+  onCreateChannel,
   composing,
   userName,
   thinkingIds,
@@ -1022,6 +1037,51 @@ export function Sidebar({
           </li>
         ) : null}
       </ul>
+
+      {/* Channels (Labs). A room list, not a drag target: membership is an id
+          list each channel owns, so a channel never becomes a section its
+          Blobs are dragged into. */}
+      {channelsVisible || channels.length > 0 || selectedChannelId !== null ? (
+        <div className="channel-list">
+          <div className="section-header">
+            <span className="section-name">Channels</span>
+            <button
+              type="button"
+              className="section-remove"
+              aria-label="New channel"
+              onClick={onCreateChannel}
+            >
+              +
+            </button>
+          </div>
+          <ul className="agent-group-rows">
+            {channels.map((channel) => (
+              <li key={channel.id}>
+                <button
+                  type="button"
+                  className={
+                    channel.id === selectedChannelId
+                      ? "channel-row channel-row-open"
+                      : "channel-row"
+                  }
+                  aria-current={channel.id === selectedChannelId ? "true" : undefined}
+                  onClick={() => onSelectChannel(channel.id)}
+                >
+                  <span className="channel-row-name"># {channel.name}</span>
+                  {channel.unread === true ? (
+                    <span className="unread-dot unread-dot-shimmer" aria-hidden="true" />
+                  ) : null}
+                  {channel.memberIds.length >= MAX_CHANNEL_MEMBERS ? (
+                    <span className="section-count">
+                      {channel.memberIds.length}/{MAX_CHANNEL_MEMBERS}
+                    </span>
+                  ) : null}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
 
       {/* The dragged Blob follows the cursor. Fixed-position and
           pointer-events: none so it never becomes its own drop target. */}

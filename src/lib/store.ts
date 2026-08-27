@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import type { Agent, Message, Routine } from "@/data/agents";
 import type { BlobMemory } from "@/lib/blob-tools";
+import { type Channel, channelIdFromConversation } from "@/lib/channels";
 import { type Group, groupIdFromConversation } from "@/lib/groups";
 import type { McpServerConfig } from "@/lib/mcp";
 import type { Recap } from "@/lib/recap";
@@ -551,11 +552,54 @@ export function saveGroupTranscript(id: string, messages: Message[]): void {
 }
 
 /**
+ * Channels (Labs). The list is its own versioned slice (see store.rs's
+ * `slice_names`). On disk the wrapper is unwrapped by `channels_read` (it
+ * returns the bare array), while the browser fallback stores the whole
+ * wrapper under the same `slice:` key, so a localStorage session behaves
+ * like the disk one — both are read back through here as the bare list.
+ */
+export async function loadChannels(): Promise<Channel[] | null> {
+  if (isTauri()) {
+    const list = await invoke("channels_read");
+    return Array.isArray(list) ? (list as Channel[]) : null;
+  }
+  const raw = backendGet("slice:channels");
+  try {
+    const parsed = raw === null ? null : (JSON.parse(raw) as { value?: unknown });
+    return Array.isArray(parsed?.value) ? (parsed.value as Channel[]) : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function saveChannels(channels: Channel[]): Promise<void> {
+  const payload = { schemaVersion: 1, value: channels };
+  if (isTauri()) {
+    await invoke("channels_write", { channels: payload.value });
+    return;
+  }
+  backendSet("slice:channels", JSON.stringify(payload));
+}
+
+export async function loadChannelTranscript(id: string): Promise<Message[] | null> {
+  return await loadTranscript(`channels/${id}`);
+}
+
+export function saveChannelTranscript(id: string, messages: Message[]): void {
+  saveTranscript(`channels/${id}`, messages);
+}
+
+/**
  * Persist a conversation without caring which kind it is — the turn loop
  * writes through here, since a Blob's reply lands in its own transcript or in
  * a group's depending only on where it was asked.
  */
 export function saveConversation(conversationId: string, messages: Message[]): void {
+  const channelId = channelIdFromConversation(conversationId);
+  if (channelId !== null) {
+    saveChannelTranscript(channelId, messages);
+    return;
+  }
   const groupId = groupIdFromConversation(conversationId);
   if (groupId === null) {
     saveBlobTranscript(conversationId, messages);
@@ -572,6 +616,10 @@ export function saveConversation(conversationId: string, messages: Message[]): v
  * drift from this one and quietly stop matching.
  */
 export function conversationSliceKey(conversationId: string): string {
+  const channelId = channelIdFromConversation(conversationId);
+  if (channelId !== null) {
+    return `channels/${channelId}/transcript`;
+  }
   const groupId = groupIdFromConversation(conversationId);
   return groupId === null ? `blobs/${conversationId}/transcript` : `groups/${groupId}/transcript`;
 }
@@ -598,6 +646,10 @@ export function saveRecap(conversationId: string, recap: Recap): void {
 }
 
 function recapSliceKey(conversationId: string): string {
+  const channelId = channelIdFromConversation(conversationId);
+  if (channelId !== null) {
+    return `channels/${channelId}/recap`;
+  }
   const groupId = groupIdFromConversation(conversationId);
   return groupId === null ? `blobs/${conversationId}/recap` : `groups/${groupId}/recap`;
 }

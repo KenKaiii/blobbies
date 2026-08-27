@@ -541,6 +541,76 @@ describe("App", () => {
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
+  it("shows the Channels lab pane only while the flag is on", async () => {
+    await flushRoster([seedBlob(1, "Ken")]);
+    const user = userEvent.setup();
+
+    // Off by default: no pane, even with nothing selected.
+    render(<App />);
+    expect(screen.queryByRole("region", { name: "Channels (Labs)" })).not.toBeInTheDocument();
+
+    // The Labs section persists the flag under the same pref: namespace.
+    await user.click(screen.getByRole("button", { name: /Ken Kai/ }));
+    await user.click(screen.getByRole("menuitem", { name: "Settings" }));
+    const dialog = screen.getByRole("dialog", { name: "Settings" });
+    expect(within(dialog).getByText(/Turning a lab off only hides its UI/)).toBeInTheDocument();
+
+    const channelsToggle = within(dialog).getByRole("switch", { name: "Channels" });
+    expect(channelsToggle).toHaveAttribute("aria-checked", "false");
+    await user.click(channelsToggle);
+    expect(window.localStorage.getItem("pref:labs.channels")).toBe("on");
+    expect(within(dialog).getByRole("switch", { name: "Channels" })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    await user.click(within(dialog).getByRole("button", { name: "Close settings" }));
+
+    // Nothing selected on launch, so the stub pane appears beside the chat.
+    expect(screen.getByRole("region", { name: "Channels (Labs)" })).toBeInTheDocument();
+
+    // Selecting a conversation routes away from the lab pane.
+    await user.click(
+      within(screen.getByRole("navigation", { name: "Conversations" })).getAllByRole("button")[0],
+    );
+    expect(screen.queryByRole("region", { name: "Channels (Labs)" })).not.toBeInTheDocument();
+  });
+
+  it("imports group chats as channels when the Channels lab is first enabled", async () => {
+    // A pre-existing group (via the legacy sections migration path) and the
+    // flag already on at launch: the group must survive untouched while a
+    // channel copy appears beside it — the one-way import.
+    const store = new Map<string, string>([
+      ["pref:onboarded", "true"],
+      ["pref:labs.channels", "on"],
+      ["pref:sections", JSON.stringify(["Work"])],
+    ]);
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => void store.set(key, value),
+      removeItem: (key: string) => void store.delete(key),
+    });
+    try {
+      await flushRoster([
+        seedBlob(1, "Ken", { section: "Work" }),
+        seedBlob(2, "Ada", { section: "Work" }),
+      ]);
+      const user = userEvent.setup();
+      render(<App />);
+      const conversations = await screen.findByRole("navigation", { name: "Conversations" });
+
+      // The imported channel is its own row, and opening it routes the chat
+      // there (aria-current) without disturbing the group it came from.
+      const channelRow = await within(conversations).findByRole("button", { name: /# Work/ });
+      await user.click(channelRow);
+      expect(channelRow).toHaveAttribute("aria-current", "true");
+      // The group's own chat is still one click away: nothing was moved.
+      await user.click(within(conversations).getByRole("button", { name: "Work" }));
+      expect(channelRow).not.toHaveAttribute("aria-current", "true");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("asks for a Composio key in the Plugins tab", async () => {
     const user = userEvent.setup();
     render(<App />);

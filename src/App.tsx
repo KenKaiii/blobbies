@@ -1,5 +1,6 @@
 import type { Message as AiMessage } from "@kenkaiiii/gg-ai";
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { ChannelPane } from "@/components/ChannelPane";
 import { ChatPane } from "@/components/ChatPane";
 import { ComposePane } from "@/components/ComposePane";
 import { CreatorPane } from "@/components/CreatorPane";
@@ -45,6 +46,13 @@ import {
   saveAttachments,
 } from "@/lib/attachments";
 import type { BlobMemory, RosterAccess, RoutineAccess } from "@/lib/blob-tools";
+import {
+  type Channel,
+  channelConversationId,
+  importGroupsAsChannels,
+  MAX_CHANNEL_MEMBERS,
+  membersOfChannel,
+} from "@/lib/channels";
 import { composioSignedIn, connectedAppNames, setComposioToolkits } from "@/lib/composio";
 import { contextWindow } from "@/lib/context-window";
 import { publishConversation } from "@/lib/conversation-bus";
@@ -52,6 +60,7 @@ import {
   addressedResponders,
   type Group,
   groupConversationId,
+  groupIdFromConversation,
   handoffTarget,
   isPass,
   MAX_GROUP_MEMBERS,
@@ -65,7 +74,8 @@ import { type McpServerConfig, parseLoopbackUrl } from "@/lib/mcp-config";
 import { modelSeesImages } from "@/lib/model-vision";
 import { notify, shouldNotify } from "@/lib/notify";
 import { unloadOllamaModel } from "@/lib/ollama";
-import { readPreference, writePreference } from "@/lib/preferences";
+import { isOpenRouterModel } from "@/lib/openrouter-model";
+import { readPreference, useLabFlag, writePreference } from "@/lib/preferences";
 import { imagePreview } from "@/lib/preview";
 import { blobSystemPrompt, configFieldEmpty, splitHistory, timeNote } from "@/lib/prompt";
 import type { Recap, RecapEntry } from "@/lib/recap";
@@ -272,6 +282,18 @@ export function App() {
   groupsRef.current = groups;
   const selectedGroupIdRef = useRef(selectedGroupId);
   selectedGroupIdRef.current = selectedGroupId;
+  /**
+   * Channels (Labs). Membership is an id list the channel owns, unlike a
+   * group's name-keyed `section` — this list is the source of truth.
+   */
+  const [channels, setChannels] = useState<Channel[]>([]);
+  const [selectedChannelId, setSelectedChannelId] = useState<string | null>(null);
+  const channelsRef = useRef(channels);
+  channelsRef.current = channels;
+  const selectedChannelIdRef = useRef(selectedChannelId);
+  selectedChannelIdRef.current = selectedChannelId;
+  /** True until a channels slice exists on disk — gates the once-only import. */
+  const channelsSliceMissing = useRef(true);
   const [mode, setMode] = useState<Mode>({ kind: "chat" });
   // Details stay hidden until explicitly opened from the chat header.
   const [detailOpen, setDetailOpen] = useState(false);
@@ -472,6 +494,10 @@ export function App() {
   const [reasoning, setReasoning] = useState(
     () => readPreference("pref:reasoning", "off") === "on",
   );
+  // Labs flags (Settings → Labs). Off by default; channels gates its pane.
+  const [channelsLab, setChannelsLab] = useLabFlag("channels");
+  const [projectsLab, setProjectsLab] = useLabFlag("projects");
+  const [workflowsLab, setWorkflowsLab] = useLabFlag("workflows");
   // First-run flow. Shown until it is completed once. An install that
   // predates onboarding sees it once.
   const [onboarding, setOnboarding] = useState(
@@ -527,16 +553,20 @@ export function App() {
   // slices win when they exist.
   // biome-ignore lint/correctness/useExhaustiveDependencies(commitAgents): stable (useCallback, no deps)
   // biome-ignore lint/correctness/useExhaustiveDependencies(mutateSent): stable (useCallback, no deps)
+  // biome-ignore lint/correctness/useExhaustiveDependencies(channelsLab): mount-only; the flag's first render already reads localStorage
+  // biome-ignore lint/correctness/useExhaustiveDependencies(importGroupsToChannels): stable, reads refs — see its declaration
   useEffect(() => {
     let cancelled = false;
     void (async () => {
-      const [roster, settings, shared, savedGroups, acpSettings] = await Promise.all([
-        store.loadRoster(),
-        store.loadSettings(),
-        store.loadUserMemories(),
-        store.loadGroups(),
-        store.loadAcpSettings(),
-      ]);
+      const [roster, settings, shared, savedGroups, savedChannels, acpSettings] =
+        await Promise.all([
+          store.loadRoster(),
+          store.loadSettings(),
+          store.loadUserMemories(),
+          store.loadGroups(),
+          store.loadChannels(),
+          store.loadAcpSettings(),
+        ]);
       if (cancelled) {
         return;
       }
@@ -553,6 +583,17 @@ export function App() {
         setGroups(migrated);
         if (migrated.length > 0) {
           store.saveGroups(migrated);
+        }
+      }
+      if (savedChannels !== null) {
+        setChannels(savedChannels);
+        channelsSliceMissing.current = false;
+      } else if (channelsLab) {
+        // First enable at launch: import straight away, before first paint
+        // has anything to show. The once-only rules live in the helper.
+        const roomList = savedGroups ?? migrateSections(roster ?? []);
+        if (roomList.length > 0) {
+          importGroupsToChannels(roomList);
         }
       }
       if (shared !== null) {
@@ -863,6 +904,7 @@ export function App() {
   const openConversation = (id: string) => {
     setSelectedId(id);
     setSelectedGroupId(null);
+    setSelectedChannelId(null);
     setMode({ kind: "chat" });
     setDetailView({ kind: "info" });
     // Reading it is what clears the dot — same rule as a group's (openGroup):
@@ -876,6 +918,7 @@ export function App() {
   /** Open a group chat. The details panel is per-Blob, so it closes. */
   const openGroup = (id: string) => {
     setSelectedGroupId(id);
+    setSelectedChannelId(null);
     setMode({ kind: "chat" });
     setDetailOpen(false);
     // Reading it is what clears the dot.
@@ -903,6 +946,123 @@ export function App() {
     changeGroups(
       groupsRef.current.map((group) => (group.id === id ? { ...group, unread: true } : group)),
     );
+  };
+
+  /** The channel twin of `markGroupUnread`, same ref-read rule. */
+  const markChannelUnread = (id: string) => {
+    if (!channelsRef.current.some((channel) => channel.id === id)) {
+      return;
+    }
+    changeChannels(
+      channelsRef.current.map((channel) =>
+        channel.id === id ? { ...channel, unread: true } : channel,
+      ),
+    );
+  };
+
+  /**
+   * The one way to write the channel list. Names are unique (shown twice,
+   * they would be indistinguishable rooms) but — unlike groups — a rename
+   * touches nothing but the channel itself, because membership is ids it
+   * owns rather than a name its members carry.
+   */
+  const changeChannels = (next: Channel[]) => {
+    const seen = new Set<string>();
+    const unique = next.filter((channel) => {
+      const key = channel.name.toLowerCase();
+      if (seen.has(key)) {
+        return false;
+      }
+      seen.add(key);
+      return true;
+    });
+    setChannels(unique);
+    channelsRef.current = unique;
+    void store.saveChannels(unique);
+    // A non-empty list is a channels slice on disk: the once-only import
+    // below must never fire over a list the user has already shaped.
+    if (unique.length > 0) {
+      channelsSliceMissing.current = false;
+    }
+    // A removed channel cannot stay on screen. Its transcript stays on disk
+    // — same rule as a group's.
+    if (selectedChannelId !== null && !unique.some((channel) => channel.id === selectedChannelId)) {
+      setSelectedChannelId(null);
+    }
+  };
+
+  /** Open a channel. Same rules as openGroup: it owns the screen. */
+  const openChannel = (id: string) => {
+    setSelectedChannelId(id);
+    setSelectedGroupId(null);
+    setSelectedId(null);
+    setMode({ kind: "chat" });
+    setDetailOpen(false);
+    // Reading it is what clears the dot.
+    if (channelsRef.current.some((channel) => channel.id === id && channel.unread === true)) {
+      changeChannels(
+        channelsRef.current.map((channel) =>
+          channel.id === id ? { ...channel, unread: false } : channel,
+        ),
+      );
+    }
+  };
+
+  /**
+   * Start a channel with every visible Blob in it ("a room"). Trimming to a
+   * named few is the threads/DM work that follows; the transcript and the
+   * mention routing work identically either way.
+   */
+  const createChannel = () => {
+    const wanted = "new-channel";
+    let name = wanted;
+    for (
+      let suffix = 2;
+      [...channelsRef.current, ...groupsRef.current].some(
+        (room) => room.name.toLowerCase() === name.toLowerCase(),
+      );
+      suffix += 1
+    ) {
+      name = `${wanted}-${suffix}`;
+    }
+    const channel: Channel = {
+      id: crypto.randomUUID(),
+      name,
+      memberIds: agentsRef.current
+        .filter((candidate) => candidate.hidden !== true)
+        .slice(0, MAX_CHANNEL_MEMBERS)
+        .map((candidate) => candidate.id),
+    };
+    changeChannels([...channelsRef.current, channel]);
+    openChannel(channel.id);
+  };
+
+  /**
+   * The one-way group import itself — fresh ids, the groups untouched, each
+   * transcript copied under the channel's own conversation id — shared by
+   * startup hydration (flag already on at launch) and a first enable
+   * mid-session. `membersOf` is defined below but only *called* after
+   * render, so the forward reference is safe.
+   */
+  const importGroupsToChannels = (roomList: Group[]) => {
+    channelsSliceMissing.current = false;
+    const imported = importGroupsAsChannels(roomList, membersOf);
+    if (imported.length === 0) {
+      return;
+    }
+    changeChannels(imported);
+    // The words are copied, not moved: the room keeps its history either way.
+    for (const channel of imported) {
+      const groupId = groupIdFromConversation(channel.importedFrom ?? "");
+      if (groupId === null) {
+        continue;
+      }
+      void store.loadGroupTranscript(groupId).then((messages) => {
+        if (messages !== null && messages.length > 0) {
+          store.saveConversation(channelConversationId(channel.id), messages);
+        }
+      });
+    }
   };
 
   /**
@@ -1177,6 +1337,12 @@ export function App() {
   }, [activeBlobId]);
 
   const selectedGroup = groups.find((candidate) => candidate.id === selectedGroupId);
+  const selectedChannel = channels.find((candidate) => candidate.id === selectedChannelId);
+
+  /** A channel's members, resolved against the live roster (see membersOf). */
+  const channelMembers = (channel: Channel): Agent[] =>
+    membersOfChannel(channel, agentsRef.current);
+
   /**
    * Every Blob speaking right now, wherever it is speaking. `thinkingFor` is
    * keyed by conversation because that is what an indicator answers for; the
@@ -1200,6 +1366,7 @@ export function App() {
 
   // Hydrate the open group's transcript, mirroring the per-Blob effect above.
   const activeGroupId = selectedGroup?.id;
+  const activeChannelId = selectedChannel?.id;
   // biome-ignore lint/correctness/useExhaustiveDependencies(mutateSent): stable (useCallback, no deps)
   useEffect(() => {
     if (activeGroupId === undefined) {
@@ -1220,6 +1387,45 @@ export function App() {
       cancelled = true;
     };
   }, [activeGroupId]);
+
+  // The channel twin of the effect above: hydrate the open channel's transcript.
+  // biome-ignore lint/correctness/useExhaustiveDependencies(mutateSent): stable (useCallback, no deps)
+  useEffect(() => {
+    if (activeChannelId === undefined) {
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      const transcript = await store.loadChannelTranscript(activeChannelId);
+      if (cancelled || transcript === null) {
+        return;
+      }
+      const key = channelConversationId(activeChannelId);
+      mutateSent((previous) =>
+        previous[key] === undefined ? { ...previous, [key]: transcript } : previous,
+      );
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeChannelId]);
+
+  // First enable after launch (Settings → Labs): the same one-way import the
+  // startup hydration performs when the flag was already on at launch. The
+  // missing-slice guard and ref reads make it once-only, and `groups` in the
+  // deps covers an enable that races hydration.
+  // biome-ignore lint/correctness/useExhaustiveDependencies(importGroupsToChannels): stable, reads refs
+  // biome-ignore lint/correctness/useExhaustiveDependencies(groups): re-runs when hydration lands the group list, so a first enable never misses it
+  // biome-ignore lint/correctness/useExhaustiveDependencies(channels): guards the once-only import
+  useEffect(() => {
+    if (!channelsLab || !channelsSliceMissing.current || channelsRef.current.length > 0) {
+      return;
+    }
+    if (groupsRef.current.length === 0) {
+      return;
+    }
+    importGroupsToChannels(groupsRef.current);
+  }, [channelsLab, groups, channels]);
 
   // Cmd/Ctrl+N starts a new Blob. Not bound while a modal owns the screen —
   // the palette would open behind it.
@@ -2795,32 +3001,44 @@ export function App() {
   };
 
   /**
-   * Send into a group chat: one user message in the shared transcript, then
-   * one turn per responder, in order, each seeing what the ones before it
-   * said.
+   * Send into a shared room — a group chat or a channel. One user message in
+   * the shared transcript, then one turn per responder, in order, each seeing
+   * what the ones before it said.
    *
    * Who is *brought in*, in order of authority: an `@mention` or a reply
    * (certain, no model call), else the router picks by job
    * (`pickResponders`), else — only if the router is unreachable — everyone.
    * A responder can then hand the next step to one teammate by *opening* its
-   * reply with `@Name` (`handoffTarget`), which is how work crosses a group
+   * reply with `@Name` (`handoffTarget`), which is how work crosses a room
    * visibly; each Blob speaks at most once, so the exchange always ends.
    *
    * Who actually *speaks* is then the Blob's own call: anyone but a Blob the
    * user named may answer `PASS`, and its bubbles come back off the screen.
    * Being brought in is an invitation — being named is not.
    *
+   * Membership and name are live resolvers rather than values: an exchange
+   * runs several turns and may start well after the message was sent, so a
+   * Blob can be removed, hidden, deleted or renamed in between (see the
+   * re-read note in the loop).
+   *
    * Attachments are not carried here: a file is saved in one Blob's home
-   * folder and inlined from there, and a group has no home of its own (the
-   * composer hides the attach button for a group).
+   * folder and inlined from there, and a room has no home of its own (the
+   * composer hides the attach button for one).
    */
-  const sendToGroup = (
-    group: Group,
+  const sendToRoom = (
+    room: {
+      convoId: string;
+      roomId: string;
+      members: () => Agent[];
+      name: () => string;
+      onUnheard: () => void;
+      onScreen: () => boolean;
+    },
     text: string,
     reply: { replyTo?: string; replyToId?: string },
   ) => {
-    const convoId = groupConversationId(group.id);
-    const members = membersOf(group);
+    const convoId = room.convoId;
+    const members = room.members();
     const message = userMessage(text, reply, []);
     appendMessage(convoId, message);
     if (members.length === 0) {
@@ -2955,15 +3173,10 @@ export function App() {
         // Membership re-read per speaker, never the list captured at send
         // time: an exchange runs several turns and may start well after the
         // message was sent, so a Blob can be dragged out, hidden, deleted or
-        // renamed in between. Speaking on behalf of a group it has left — or
+        // renamed in between. Speaking on behalf of a room it has left — or
         // introducing itself to the model under a stale name — is worse than
         // one fewer voice.
-        //
-        // Read through the *live* group, because membership is keyed by name:
-        // after a rename its members carry the new one, and the captured
-        // group would match nobody at all.
-        const live = groupsRef.current.find((candidate) => candidate.id === group.id) ?? group;
-        const roster = membersOf(live);
+        const roster = room.members();
         const speaker = roster.find((candidate) => candidate.id === member.id);
         if (speaker === undefined) {
           continue;
@@ -2976,7 +3189,7 @@ export function App() {
         const obliged = spokenTo.has(member.id);
         outcome = await requestReply(speaker, history, {
           trigger: "user",
-          group: { id: group.id, name: live.name, members: roster },
+          group: { id: room.roomId, name: room.name(), members: roster },
           // The sole picked Blob owes an answer as surely as a named one: PASS
           // means "someone else has this", and there is nobody else. Told up
           // front rather than caught after — qwen3.5:2b passed on "what did
@@ -3019,8 +3232,8 @@ export function App() {
         // Somebody spoke here. An exchange runs several turns and the user
         // often switches away mid-way, so the sidebar has to show the room
         // moved on — unless they are looking straight at it.
-        if (selectedGroupIdRef.current !== group.id) {
-          markGroupUnread(group.id);
+        if (!room.onScreen()) {
+          room.onUnheard();
         }
         // If it handed the next step to a teammate, that teammate speaks next
         // — the visible hand-off a group is for. `handoffTarget` is
@@ -3113,6 +3326,53 @@ export function App() {
     });
   };
 
+  /** A group chat as a room: membership is the group's name, re-read live. */
+  const sendToGroup = (
+    group: Group,
+    text: string,
+    reply: { replyTo?: string; replyToId?: string },
+  ) =>
+    sendToRoom(
+      {
+        convoId: groupConversationId(group.id),
+        roomId: group.id,
+        members: () => {
+          const live = groupsRef.current.find((candidate) => candidate.id === group.id) ?? group;
+          return membersOf(live);
+        },
+        name: () =>
+          (groupsRef.current.find((candidate) => candidate.id === group.id) ?? group).name,
+        onUnheard: () => markGroupUnread(group.id),
+        onScreen: () => selectedGroupIdRef.current === group.id,
+      },
+      text,
+      reply,
+    );
+
+  /** A channel as a room: membership is the id list the channel owns. */
+  const sendToChannel = (
+    channel: Channel,
+    text: string,
+    reply: { replyTo?: string; replyToId?: string },
+  ) =>
+    sendToRoom(
+      {
+        convoId: channelConversationId(channel.id),
+        roomId: channel.id,
+        members: () => {
+          const live =
+            channelsRef.current.find((candidate) => candidate.id === channel.id) ?? channel;
+          return membersOfChannel(live, agentsRef.current);
+        },
+        name: () =>
+          (channelsRef.current.find((candidate) => candidate.id === channel.id) ?? channel).name,
+        onUnheard: () => markChannelUnread(channel.id),
+        onScreen: () => selectedChannelIdRef.current === channel.id,
+      },
+      text,
+      reply,
+    );
+
   const sendMessage = (
     text: string,
     options?: { replyTo?: string; replyToId?: string; files?: readonly PickedFile[] },
@@ -3133,6 +3393,10 @@ export function App() {
     lastSend.current = { text, at: now };
     if (selectedGroup !== undefined) {
       sendToGroup(selectedGroup, text, reply);
+      return;
+    }
+    if (selectedChannel !== undefined) {
+      sendToChannel(selectedChannel, text, reply);
       return;
     }
     if (agent === undefined) {
@@ -3268,6 +3532,11 @@ export function App() {
         groups={groups}
         selectedGroupId={selectedGroupId}
         onSelectGroup={openGroup}
+        channels={channelsLab ? channels : []}
+        channelsVisible={channelsLab}
+        selectedChannelId={selectedChannelId}
+        onSelectChannel={openChannel}
+        onCreateChannel={createChannel}
         onChangeGroups={changeGroups}
         onRenameGroup={renameGroup}
         composing={composing}
@@ -3301,6 +3570,43 @@ export function App() {
           onCreateGroup={createGroup}
           onCancel={() => setMode({ kind: "chat" })}
         />
+      ) : null}
+      {activeMode.kind === "chat" &&
+      channelsLab &&
+      selectedChannel !== undefined &&
+      agent !== undefined ? (
+        (() => {
+          const members = channelMembers(selectedChannel);
+          const speaking = members.find((member) => member.id === thinkingFor);
+          return (
+            <ChannelPane
+              channel={selectedChannel}
+              members={members}
+              messages={sentByAgent[channelConversationId(selectedChannel.id)] ?? []}
+              notSaving={unsavedKeys.has(
+                store.conversationSliceKey(channelConversationId(selectedChannel.id)),
+              )}
+              thinking={speaking !== undefined}
+              {...(speaking === undefined ? {} : { thinkingAgent: speaking })}
+              model={model}
+              onModelChange={changeModel}
+              reasoning={reasoning}
+              onReasoningChange={changeReasoning}
+              onSend={sendMessage}
+              onStop={stopTurn}
+              onOpenSettings={openSettings}
+            />
+          );
+        })()
+      ) : activeMode.kind === "chat" &&
+        channelsLab &&
+        selectedId === null &&
+        selectedGroup === undefined ? (
+        <section className="labs-pane" aria-label="Channels (Labs)">
+          <header className="labs-pane-header" data-tauri-drag-region>
+            Channels — pick one, or start a new channel in the sidebar
+          </header>
+        </section>
       ) : null}
       {activeMode.kind === "chat" && selectedGroup !== undefined && agent !== undefined ? (
         (() => {
@@ -3511,6 +3817,12 @@ export function App() {
           onTimezoneChange={changeTimezone}
           model={model}
           onModelChange={changeModel}
+          labFlags={{ channels: channelsLab, projects: projectsLab, workflows: workflowsLab }}
+          onLabFlagChange={(name, on) => {
+            if (name === "channels") setChannelsLab(on);
+            else if (name === "projects") setProjectsLab(on);
+            else setWorkflowsLab(on);
+          }}
           onReplayOnboarding={replayOnboarding}
           acp={
             <Suspense fallback={null}>

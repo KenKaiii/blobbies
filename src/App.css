@@ -6481,3 +6481,61 @@ a.modal-button {
     animation: none;
   }
 }
+
+/* Labs placeholder pane (Settings → Labs → Channels). Same shape as
+ * compose-pane so the stub sits in the layout until the real UI lands. */
+.labs-pane {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-chat);
+  animation: pane-fade-in 160ms var(--ease-standard);
+}
+
+.labs-pane-header {
+  padding: 14px 20px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  user-select: none;
+}
+
+/* Channels (Labs). A flat room list under the Blob sections: membership is
+   an id list each channel owns, so there are no rows nested under it. */
+.channel-list {
+  padding: 4px 0 8px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.channel-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 12px;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 13px;
+  color: var(--text-secondary);
+  text-align: left;
+  cursor: pointer;
+}
+
+.channel-row:hover {
+  background: var(--surface-hover);
+}
+
+.channel-row-open {
+  background: var(--surface-active);
+  color: var(--text-primary);
+}
+
+.channel-row-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

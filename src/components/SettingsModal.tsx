@@ -12,6 +12,9 @@ import {
   type OllamaModel,
   startOllama,
 } from "@/lib/ollama";
+import type { OpenRouterModel } from "@/lib/openrouter";
+import { isOpenRouterModel, OPENROUTER_MODEL_PREFIX } from "@/lib/openrouter-model";
+import type { LabFlagName } from "@/lib/preferences";
 import { deleteSecret, setSecret } from "@/lib/secrets";
 import { listSkills, type Skill } from "@/lib/skills";
 import { isTauri, openExternal } from "@/lib/tauri";
@@ -58,6 +61,25 @@ function updateBlurb(update: UpdateState): string {
 /** The dialog's tabs; also what the search palette can jump straight to. */
 export type SettingsTab = "general" | "model" | "plugins" | "updates";
 
+/** One row per lab flag: title for the toggle, blurb under it. */
+const LAB_FLAG_META: { name: LabFlagName; title: string; blurb: string }[] = [
+  {
+    name: "channels",
+    title: "Channels",
+    blurb: "Channels: Slack-style rooms for your Blobs.",
+  },
+  {
+    name: "projects",
+    title: "Projects",
+    blurb: "Projects: Kanban-lite task boards.",
+  },
+  {
+    name: "workflows",
+    title: "Workflows",
+    blurb: "Workflows: multi-step automations.",
+  },
+];
+
 interface SettingsModalProps {
   /** Tab to open on, for callers that jump to one. Defaults to General. */
   initialTab?: SettingsTab;
@@ -72,6 +94,9 @@ interface SettingsModalProps {
   onTimezoneChange: (timezone: string) => void;
   model: string;
   onModelChange: (model: string) => void;
+  /** Lab feature flags; off by default, toggled in the Labs section. */
+  labFlags: Record<LabFlagName, boolean>;
+  onLabFlagChange: (name: LabFlagName, on: boolean) => void;
   /** Dev action: replay the first-run flow once, right now. */
   onReplayOnboarding: () => void;
   /** The Editors (ACP) section, rendered under Plugins by the app. */
@@ -290,6 +315,8 @@ export function SettingsModal({
   onTimezoneChange,
   model,
   onModelChange,
+  labFlags,
+  onLabFlagChange,
   onReplayOnboarding,
   acp,
   onClose,
@@ -653,6 +680,42 @@ export function SettingsModal({
                   <button type="button" className="modal-button" onClick={onReplayOnboarding}>
                     Replay
                   </button>
+                </div>
+              </div>
+
+              <p className="modal-section-label">Labs</p>
+              <div className="modal-card">
+                {LAB_FLAG_META.map((flag, position) => (
+                  <Fragment key={flag.name}>
+                    {position === 0 ? null : <div className="modal-divider" />}
+                    <div className="modal-row modal-row-multiline">
+                      <span className="modal-row-text">
+                        <label className="modal-row-title" htmlFor={`labs-${flag.name}-toggle`}>
+                          {flag.title}
+                        </label>
+                        <span className="modal-row-blurb">{flag.blurb}</span>
+                      </span>
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={labFlags[flag.name]}
+                        id={`labs-${flag.name}-toggle`}
+                        className={labFlags[flag.name] ? "toggle toggle-on" : "toggle"}
+                        onClick={() => onLabFlagChange(flag.name, !labFlags[flag.name])}
+                      >
+                        <span className="toggle-knob" aria-hidden="true" />
+                      </button>
+                    </div>
+                  </Fragment>
+                ))}
+                <div className="modal-divider" />
+                <div className="modal-row modal-row-multiline">
+                  <span className="modal-row-text">
+                    <span className="modal-row-blurb">
+                      Turning a lab off only hides its UI — anything you made stays on disk and
+                      comes back when you turn it on again.
+                    </span>
+                  </span>
                 </div>
               </div>
             </>
