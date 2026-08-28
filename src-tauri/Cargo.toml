@@ -75,7 +75,7 @@ image = { version = "0.25.10", default-features = false, features = [
     "gif",
     "bmp",
 ] }
-base64 = "0.22.1"
+base64 = "0.23.1"
 # CSPRNG for the ACP bridge's connection token (src/acp.rs). Already in the
 # tree via tauri, so naming it costs no extra build time or supply-chain surface.
 getrandom = "0.3.4"
