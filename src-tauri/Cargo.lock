@@ -305,7 +305,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "block2",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "image",
  "keyring",
  "objc2",

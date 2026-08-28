@@ -78,7 +78,7 @@ image = { version = "0.25.10", default-features = false, features = [
 base64 = "0.22.1"
 # CSPRNG for the ACP bridge's connection token (src/acp.rs). Already in the
 # tree via tauri, so naming it costs no extra build time or supply-chain surface.
-getrandom = "0.3.4"
+getrandom = "0.4.3"
 
 # Screen capture (src/capture.rs) — macOS and Windows only, deliberately not
 # Linux. There, xcap captures Wayland through pipewire, a hard (non-optional)
