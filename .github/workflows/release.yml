@@ -214,6 +214,12 @@ jobs:
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
+          # Handoff to the release job, nothing more: once it has attached these
+          # to the GitHub Release they are dead weight, and release assets are
+          # stored separately from artifacts. Left on the default 90-day
+          # retention these builds exhausted the account's artifact storage
+          # quota, which silently blocked artifact uploads across every repo.
+          retention-days: 1
           name: blobbies-${{ matrix.name }}
           path: out/*
           if-no-files-found: error
