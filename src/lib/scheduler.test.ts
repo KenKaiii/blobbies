@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Routine } from "@/data/agents";
-import { armRoutines, type SchedulerHost, tick } from "@/lib/scheduler";
+import { armRoutines, type SchedulerHost, startScheduler, tick } from "@/lib/scheduler";
 import {
   type EventListener,
   listenerIdentity,
@@ -19,6 +19,8 @@ function makeHost(initial: Record<string, Routine[]>) {
   const feeds = new Map<string, TriggerEvent[]>();
   let busy = false;
   let fireResult: "done" | "failed" | "cancelled" = "done";
+  // Set while a test wants turns to stay in flight (see `hold`).
+  let gate: Promise<void> | null = null;
   const host: SchedulerHost = {
     routines: () => routines,
     update: (blobId, routineId, patch) => {
@@ -56,7 +58,7 @@ function makeHost(initial: Record<string, Routine[]>) {
       seenAtFire.push(
         routines.get(blobId)?.find((candidate) => candidate.id === routine.id)?.cursors,
       );
-      return Promise.resolve(fireResult);
+      return gate === null ? Promise.resolve(fireResult) : gate.then(() => fireResult);
     },
   };
   return {
@@ -72,6 +74,17 @@ function makeHost(initial: Record<string, Routine[]>) {
     },
     setFireResult: (value: "done" | "failed" | "cancelled") => {
       fireResult = value;
+    },
+    /** Keep every turn from here on in flight. Returns the release. */
+    hold: () => {
+      let release = () => {};
+      gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return () => {
+        gate = null;
+        release();
+      };
     },
     get: (blobId: string, routineId: string) =>
       routines.get(blobId)?.find((candidate) => candidate.id === routineId),
@@ -409,5 +422,104 @@ describe("armRoutines", () => {
     const h = makeHost({ b1: [routine({ nextRunAt: 42 })] });
     expect(armRoutines(h.host, 10 * HOUR)).toBe(0);
     expect(h.get("b1", "r1")?.nextRunAt).toBe(42);
+  });
+});
+
+/**
+ * The native heartbeat: the clock that keeps time while the window is hidden.
+ *
+ * The page's own `setInterval` is throttled or suspended by the OS once the
+ * window is closed to the tray, which is why a 7am routine used to sit there
+ * until the app was reopened. These tests never advance a timer — every fire
+ * below is driven by the beat alone, which is exactly the closed-window case.
+ */
+const beat = vi.hoisted(() => {
+  const handlers = new Set<() => void>();
+  return {
+    handlers,
+    emit: () => {
+      for (const handler of handlers) handler();
+    },
+  };
+});
+
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: (_event: string, handler: () => void) => {
+    beat.handlers.add(handler);
+    return Promise.resolve(() => beat.handlers.delete(handler));
+  },
+}));
+
+/** Let the async `listen` subscription land (dynamic import + IPC promise). */
+const subscribed = async () => {
+  await vi.waitFor(() => expect(beat.handlers.size).toBeGreaterThan(0));
+};
+
+describe("startScheduler (native heartbeat)", () => {
+  beforeEach(() => {
+    // isTauri() reads this: without it the scheduler stays browser-only and
+    // never subscribes to the beat.
+    (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {};
+  });
+
+  afterEach(() => {
+    beat.handlers.clear();
+    delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
+  });
+
+  it("fires a due routine on a beat alone, with no page tick", async () => {
+    const h = makeHost({ b1: [routine({ nextRunAt: Date.now() - 1 })] });
+    const stop = startScheduler(h.host);
+    await subscribed();
+
+    // No timer is advanced anywhere in this test: the page interval is 30s
+    // away and, with the window hidden, would never arrive at all.
+    beat.emit();
+    await vi.waitFor(() => expect(h.fired).toEqual(["r1"]));
+    expect(h.get("b1", "r1")?.nextRunAt).toBeGreaterThan(Date.now());
+    stop();
+  });
+
+  it("stops listening once stopped, so a later beat fires nothing", async () => {
+    const h = makeHost({ b1: [routine({ nextRunAt: Date.now() - 1 })] });
+    const stop = startScheduler(h.host);
+    await subscribed();
+    stop();
+    await vi.waitFor(() => expect(beat.handlers.size).toBe(0));
+
+    beat.emit();
+    await Promise.resolve();
+    expect(h.fired).toEqual([]);
+  });
+
+  it("drops a beat that lands mid-pass instead of firing a second routine", async () => {
+    // Two Blobs, both due. Only the in-flight guard keeps the second beat from
+    // starting a parallel pass: claim-before-run would not stop it, because
+    // b2's routine is untouched by the pass running for b1.
+    const now = Date.now();
+    const h = makeHost({
+      b1: [routine({ id: "r1", nextRunAt: now - 1 })],
+      b2: [routine({ id: "r2", nextRunAt: now - 1 })],
+    });
+    const release = h.hold();
+    const stop = startScheduler(h.host);
+    await subscribed();
+
+    beat.emit();
+    await vi.waitFor(() => expect(h.fired).toEqual(["r1"]));
+
+    // The turn is still running. Beats keep arriving every 30s regardless.
+    beat.emit();
+    beat.emit();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(h.fired).toEqual(["r1"]);
+
+    // Dropped, not lost: the next beat after the pass settles picks r2 up.
+    release();
+    await vi.waitFor(() => expect(h.get("b1", "r1")?.lastRunAt).toBeDefined());
+    beat.emit();
+    await vi.waitFor(() => expect(h.fired).toEqual(["r1", "r2"]));
+    stop();
   });
 });

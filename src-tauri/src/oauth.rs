@@ -156,6 +156,29 @@ pub(crate) async fn oauth_await_redirect(port: u16) -> Result<OauthRedirect> {
 mod tests {
     use super::*;
 
+    /// Connect once the waiting thread has actually bound the port.
+    ///
+    /// The listener re-binds on its own thread, so a fixed sleep here is a
+    /// race: on a loaded machine the bind can land after it, and the connect
+    /// dies with ECONNREFUSED for reasons that have nothing to do with the
+    /// code under test. Retrying until the bind exists removes the timing
+    /// assumption instead of widening it.
+    fn connect_once_bound(port: u16) -> TcpStream {
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            match TcpStream::connect(SocketAddr::from((Ipv4Addr::LOCALHOST, port))) {
+                Ok(stream) => return stream,
+                Err(error) => {
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "listener never bound port {port}: {error}"
+                    );
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+            }
+        }
+    }
+
     /// The port must be usable and must not be a fixed one.
     #[test]
     fn hands_out_a_free_loopback_port() {
@@ -173,10 +196,7 @@ mod tests {
         let port = tauri::async_runtime::block_on(oauth_listen_port()).expect("port");
         let waiting =
             std::thread::spawn(move || tauri::async_runtime::block_on(oauth_await_redirect(port)));
-        // Give the listener a moment to re-bind before knocking.
-        std::thread::sleep(Duration::from_millis(150));
-        let mut client =
-            TcpStream::connect(SocketAddr::from((Ipv4Addr::LOCALHOST, port))).expect("connect");
+        let mut client = connect_once_bound(port);
         client
             .write_all(b"GET /callback?code=abc123&state=xyz HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
             .expect("write");
@@ -195,16 +215,12 @@ mod tests {
         let port = tauri::async_runtime::block_on(oauth_listen_port()).expect("port");
         let waiting =
             std::thread::spawn(move || tauri::async_runtime::block_on(oauth_await_redirect(port)));
-        std::thread::sleep(Duration::from_millis(150));
-
-        let mut noise =
-            TcpStream::connect(SocketAddr::from((Ipv4Addr::LOCALHOST, port))).expect("connect");
+        let mut noise = connect_once_bound(port);
         let _ = noise.write_all(b"GET /favicon.ico HTTP/1.1\r\n\r\n");
         let mut sink = String::new();
         let _ = noise.read_to_string(&mut sink);
 
-        let mut real =
-            TcpStream::connect(SocketAddr::from((Ipv4Addr::LOCALHOST, port))).expect("connect");
+        let mut real = connect_once_bound(port);
         real.write_all(b"GET /callback?code=second HTTP/1.1\r\n\r\n")
             .expect("write");
         let mut page = String::new();

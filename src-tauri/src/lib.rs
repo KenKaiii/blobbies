@@ -2,6 +2,7 @@ mod acp;
 mod capture;
 mod commands;
 mod error;
+mod heartbeat;
 mod home;
 mod media;
 mod notifications;
@@ -75,6 +76,9 @@ pub fn run() {
         .setup(|app| {
             store::startup_maintenance(app.handle());
             skills::seed_bundled(app.handle());
+            // The routine clock. Out here rather than in the webview because a
+            // hidden window's timers stop (see heartbeat.rs).
+            heartbeat::start(app.handle());
             // Best-effort: an app with no tray icon is a smaller failure than
             // no app at all, and every tray action has an equivalent inside
             // the window.

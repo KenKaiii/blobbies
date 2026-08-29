@@ -1,5 +1,6 @@
 import type { Routine } from "@/data/agents";
 import { nextFireTime, scheduleBudget } from "@/lib/schedule";
+import { isTauri } from "@/lib/tauri";
 import {
   anyListenerMatches,
   type EventListener,
@@ -67,6 +68,13 @@ export interface SchedulerHost {
 
 /** How often the scheduler looks for due routines. */
 export const TICK_MS = 30_000;
+
+/**
+ * Beat from the native heartbeat (`src-tauri/src/heartbeat.rs`), which keeps
+ * time while the window is hidden — this page's own interval does not, because
+ * the OS throttles timers in a webview nobody is looking at.
+ */
+const TICK_EVENT = "scheduler://tick";
 
 /**
  * One pass over every routine: claim and fire the first due one.
@@ -227,13 +235,65 @@ export function armRoutines(host: SchedulerHost, now: number = Date.now()): numb
   return armed;
 }
 
-/** Start the interval loop. Returns a stop function. */
+/**
+ * Start the tick loop. Returns a stop function.
+ *
+ * Two clocks drive the same pass. The native heartbeat is the one that makes a
+ * 7am routine fire at 7am, because it keeps time with the window closed; the
+ * page's own interval is the fallback for a plain browser (`pnpm dev`), where
+ * there is no Tauri to beat. Both arriving is harmless: `tick` is guarded
+ * against overlap here, and claim-before-run makes a duplicate a no-op.
+ */
 export function startScheduler(host: SchedulerHost): () => void {
   armRoutines(host);
+  let running = false;
+  // Serialised, not queued: a beat that lands mid-pass is dropped, and the
+  // next one (30s later) sees the same due routine still due.
+  const pass = () => {
+    if (running) {
+      return;
+    }
+    running = true;
+    void tick(host).finally(() => {
+      running = false;
+    });
+  };
   // Startup catch-up runs on the first tick, not immediately: hydration may
   // still be filling `routines()` when this is called.
-  const interval = setInterval(() => {
-    void tick(host);
-  }, TICK_MS);
-  return () => clearInterval(interval);
+  const interval = setInterval(pass, TICK_MS);
+  const stopBeat = onNativeTick(pass);
+  return () => {
+    clearInterval(interval);
+    stopBeat();
+  };
+}
+
+/**
+ * Subscribe to the native heartbeat. Returns an unsubscribe; a no-op (and no
+ * Tauri import) in a plain browser or in tests.
+ *
+ * Async subscription with a synchronous unsubscribe: `listen` resolves after an
+ * IPC round trip, so a stop that lands first has to be remembered, or the
+ * listener outlives the scheduler that asked for it.
+ */
+function onNativeTick(handler: () => void): () => void {
+  if (!isTauri()) {
+    return () => {};
+  }
+  let unlisten: (() => void) | null = null;
+  let stopped = false;
+  void import("@tauri-apps/api/event")
+    .then(({ listen }) => listen(TICK_EVENT, handler))
+    .then((off) => {
+      if (stopped) {
+        off();
+      } else {
+        unlisten = off;
+      }
+    })
+    .catch(() => {});
+  return () => {
+    stopped = true;
+    unlisten?.();
+  };
 }
