@@ -1,8 +1,10 @@
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { describe, expect, it, vi } from "vitest";
 import { Sidebar } from "@/components/Sidebar";
 import type { Agent } from "@/data/agents";
 import type { BlobActivity } from "@/lib/activity";
+import type { Channel } from "@/lib/channels";
 
 const ken: Agent = {
   id: "61ec34f1-9ba5-4eff-b8e1-7acefb2148ea",
@@ -14,7 +16,12 @@ const ken: Agent = {
 };
 
 /** The rail with everything not under test held constant. */
-const rail = (activity?: Record<string, BlobActivity>, pinned = false) => (
+const rail = (
+  activity?: Record<string, BlobActivity>,
+  pinned = false,
+  channels: Channel[] = [],
+  onCreateDirectMessage = (_agent: Agent) => {},
+) => (
   <Sidebar
     agents={[pinned ? { ...ken, pinned: true } : ken]}
     selectedId={ken.id}
@@ -23,11 +30,19 @@ const rail = (activity?: Record<string, BlobActivity>, pinned = false) => (
     onSelectGroup={() => {}}
     onChangeGroups={() => {}}
     onRenameGroup={() => {}}
+    channels={channels}
+    channelsVisible={channels.length > 0}
+    selectedChannelId={null}
+    onSelectChannel={() => {}}
+    onCreateChannel={() => {}}
+    onCreateDirectMessage={onCreateDirectMessage}
+    onDeleteChannel={() => {}}
     composing={false}
     userName="Ken Kai"
     thinkingIds={new Set(activity === undefined ? [] : [ken.id])}
     {...(activity === undefined ? {} : { activity })}
     onSelect={() => {}}
+    onReorderBlobs={() => {}}
     onStartCompose={() => {}}
     onOpenSettings={() => {}}
     onOpenPlugins={() => {}}
@@ -57,6 +72,28 @@ describe("a running Blob's row", () => {
     // Turn over: back to what the Blob actually said.
     rerender(rail());
     expect(screen.getByText("Here are the three links.")).toBeTruthy();
+  });
+
+  it("creates a direct message from only visible Blobs", async () => {
+    const create = vi.fn();
+    const dm: Channel = { id: "dm-1", name: "Ken", kind: "dm", memberIds: [ken.id] };
+    render(rail(undefined, false, [dm], create));
+
+    expect(screen.getByText("Direct messages")).toBeTruthy();
+    expect(screen.getAllByText("Ken").length).toBeGreaterThan(1);
+    const newDirectMessage = screen.getByRole("button", { name: "New direct message" });
+    expect(newDirectMessage.querySelector("svg")).toBeTruthy();
+    expect(newDirectMessage).toHaveAttribute("aria-expanded", "false");
+    await userEvent.click(newDirectMessage);
+    expect(newDirectMessage).toHaveAttribute("aria-expanded", "true");
+    await userEvent.click(
+      within(screen.getByRole("dialog", { name: "New direct message" })).getByRole("button", {
+        name: "Ken",
+      }),
+    );
+
+    expect(create).toHaveBeenCalledWith(ken);
+    expect(screen.queryByRole("dialog", { name: "New direct message" })).toBeNull();
   });
 
   it("captions its pinned tile without hiding which Blob it is", () => {

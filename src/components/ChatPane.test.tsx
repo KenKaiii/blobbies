@@ -71,6 +71,64 @@ const endPop = (target: Element, animationName = "message-jelly") => {
 };
 
 describe("ChatPane", () => {
+  it("offers compact settings and suppresses embedded identity chrome", async () => {
+    render(
+      <ChatPane
+        agent={agent}
+        group={{ id: "thread", name: "Thread", members: [agent] }}
+        headerMode="embedded"
+        messages={[]}
+        model="llama"
+        onModelChange={() => {}}
+        reasoning={false}
+        onReasoningChange={() => {}}
+        onSend={() => {}}
+        detailOpen={false}
+        onToggleDetail={() => {}}
+        onOpenSettings={() => {}}
+      />,
+    );
+
+    expect(screen.queryByRole("textbox", { name: "Group name" })).not.toBeInTheDocument();
+    const settings = screen.getByRole("button", { name: "Conversation settings" });
+    expect(settings).toHaveAttribute("aria-expanded", "false");
+    await userEvent.click(settings);
+    expect(settings).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getAllByRole("combobox", { name: "Thinking" })).toHaveLength(1);
+    expect(screen.getAllByRole("combobox", { name: "Model" })).toHaveLength(1);
+    fireEvent.keyDown(screen.getByRole("group", { name: "Conversation settings" }), {
+      key: "Escape",
+    });
+    expect(settings).toHaveFocus();
+  });
+
+  it("uses persistent thread actions and counts only when requested", async () => {
+    const onOpenThread = vi.fn();
+    const { rerender } = render(pane(false, vi.fn(), [messages[0] as Message]));
+    expect(screen.getByRole("button", { name: "Reply" })).toBeInTheDocument();
+
+    rerender(
+      <ChatPane
+        agent={agent}
+        messages={[messages[0] as Message]}
+        onOpenThread={onOpenThread}
+        threadReplyCounts={{ m1: 2 }}
+        model=""
+        onModelChange={() => {}}
+        reasoning={false}
+        onReasoningChange={() => {}}
+        onSend={() => {}}
+        detailOpen={false}
+        onToggleDetail={() => {}}
+        onOpenSettings={() => {}}
+      />,
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Open thread" }));
+    expect(onOpenThread).toHaveBeenCalledWith(messages[0]);
+    expect(screen.getByRole("button", { name: "2 replies" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Reply" })).not.toBeInTheDocument();
+  });
+
   it("turns the send circle into Stop while replying, and takes Escape", async () => {
     const user = userEvent.setup();
     const onStop = vi.fn();

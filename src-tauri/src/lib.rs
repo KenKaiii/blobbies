@@ -44,6 +44,8 @@ pub fn run() {
             shell::shell_run,
             store::store_read,
             store::store_write,
+            store::channels_read,
+            store::channels_write,
             store::store_delete_blob,
             store::store_list_blobs,
             store::store_export_blob,

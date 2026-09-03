@@ -22,6 +22,13 @@ pub enum Error {
     #[error("stored file is too large to load")]
     SliceTooLarge,
 
+    #[error("{file} uses schema {found}, but this app supports up to {supported}")]
+    SliceSchemaTooNew {
+        file: String,
+        found: u32,
+        supported: u32,
+    },
+
     #[error("stored data is corrupted: {0}")]
     Corrupt(String),
 

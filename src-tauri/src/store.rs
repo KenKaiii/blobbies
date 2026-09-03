@@ -68,6 +68,10 @@ const BLOB_SLICES: [&str; 5] = ["config", "routines", "transcript", "runs", "rec
 /// Slices that live inside a group-chat directory.
 const GROUP_SLICES: [&str; 2] = ["transcript", "recap"];
 
+/// Slices that live inside a channel directory (the Labs successor to group
+/// chats; same shape, so transcripts and recaps key identically).
+const CHANNEL_SLICES: [&str; 2] = ["transcript", "recap"];
+
 /// True for `transcript-1`, `transcript-2`, … — the sealed older halves of a
 /// long conversation.
 ///
@@ -112,7 +116,8 @@ fn is_valid_blob_id(id: &str) -> bool {
 
 /// Resolve a slice key to its on-disk path, rejecting anything not on the
 /// allowlist. Keys are `<root-slice>`, `blobs/<uuid>/<blob-slice>` or
-/// `groups/<uuid>/<group-slice>`.
+/// `groups/<uuid>/<group-slice>`, or
+/// `channels/<uuid>/threads/<message-uuid>/<channel-slice>`.
 fn resolve_slice_path(data_root: &Path, key: &str) -> Result<PathBuf> {
     if ROOT_SLICES.contains(&key) {
         return Ok(data_root.join(format!("{key}.json")));
@@ -136,6 +141,29 @@ fn resolve_slice_path(data_root: &Path, key: &str) -> Result<PathBuf> {
             .join("groups")
             .join(id)
             .join(format!("{slice}.json")));
+    }
+    if let Some(rest) = key.strip_prefix("channels/")
+        && let Some((id, slice)) = rest.split_once('/')
+        && is_valid_blob_id(id)
+    {
+        if CHANNEL_SLICES.contains(&slice) || is_transcript_archive(slice) {
+            return Ok(data_root
+                .join("channels")
+                .join(id)
+                .join(format!("{slice}.json")));
+        }
+        if let Some(thread) = slice.strip_prefix("threads/")
+            && let Some((message_id, thread_slice)) = thread.split_once('/')
+            && is_valid_blob_id(message_id)
+            && (CHANNEL_SLICES.contains(&thread_slice) || is_transcript_archive(thread_slice))
+        {
+            return Ok(data_root
+                .join("channels")
+                .join(id)
+                .join("threads")
+                .join(message_id)
+                .join(format!("{thread_slice}.json")));
+        }
     }
     Err(Error::InvalidSliceKey)
 }
@@ -323,12 +351,279 @@ pub(crate) fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+/// How many date-stamped backup directories to keep; older ones are pruned.
+const BACKUP_DIRS_TO_KEEP: usize = 5;
+
+/// A migration step: takes the slice's `value` at version `n + 1` (1-based,
+/// index `n` in a slice's migration table) and returns the value at version
+/// `n + 2`. Ordered — the runner applies them in sequence until the slice
+/// reaches the slice's latest version.
+type SliceMigration = fn(serde_json::Value) -> std::result::Result<serde_json::Value, String>;
+
+/// The three slices added by the agent-army work. Each carries its own
+/// `schemaVersion` and its own migration table so they can evolve
+/// independently of the legacy root slices above.
+pub(crate) mod slice_names {
+    pub(crate) const CHANNELS: &str = "channels.json";
+    pub(crate) const PROJECTS: &str = "projects.json";
+    pub(crate) const WORKFLOWS: &str = "workflows.json";
+}
+
+/// Every versioned slice is currently at schema 1, so the migration tables
+/// are empty — but the runner below is exercised by tests with a fake table
+/// so the machinery is proven before any real migration exists.
+const CHANNELS_LATEST: u32 = 1;
+const PROJECTS_LATEST: u32 = 1;
+const WORKFLOWS_LATEST: u32 = 1;
+const NO_MIGRATIONS: &[SliceMigration] = &[];
+
+/// Typed payloads for the three new slices. Empty vec-backed for now; concrete
+/// element types arrive in later steps.
+pub(crate) type Channels = Vec<serde_json::Value>;
+pub(crate) type Projects = Vec<serde_json::Value>;
+pub(crate) type Workflows = Vec<serde_json::Value>;
+
+/// Apply ordered migrations to a slice's value until it reaches `latest`.
+/// Migration `i` in the table upgrades version `i + 1` to `i + 2`.
+///
+/// A version newer than `latest` is refused with an error naming the file —
+/// the file is from a newer build and must never be silently dropped or
+/// rewritten by this one.
+fn run_slice_migrations(
+    file: &str,
+    mut value: serde_json::Value,
+    found: u32,
+    latest: u32,
+    migrations: &[SliceMigration],
+) -> Result<serde_json::Value> {
+    if found > latest {
+        return Err(Error::SliceSchemaTooNew {
+            file: file.to_owned(),
+            found,
+            supported: latest,
+        });
+    }
+    if found == 0 || found == latest {
+        return Ok(value);
+    }
+    let needed = (latest - found) as usize;
+    let start = (found - 1) as usize;
+    if start + needed > migrations.len() {
+        return Err(Error::Corrupt(format!(
+            "{file}: no migration from schema {found} to {latest}"
+        )));
+    }
+    for step in &migrations[start..start + needed] {
+        value = step(value).map_err(Error::Corrupt)?;
+    }
+    Ok(value)
+}
+
+/// Today's date as `YYYY-MM-DD` (UTC), used to date-stamp backup dirs.
+fn today_utc() -> String {
+    let secs = u64::try_from(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_secs())
+            .unwrap_or_default(),
+    )
+    .unwrap_or_default();
+    // Civil-from-days (Howard Hinnant's algorithm); no chrono dependency needed.
+    let days = (secs / 86_400) as i64;
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let year = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = if month <= 2 { year + 1 } else { year };
+    format!("{year:04}-{month:02}-{day:02}")
+}
+
+/// Copy a slice file to `backups/<YYYY-MM-DD>/<file>` before migrating it,
+/// atomically (temp file + rename), so the pre-migration bytes survive even a
+/// crash mid-migration. Never touches the original.
+fn backup_before_migration(data_root: &Path, slice_path: &Path, file: &str) -> Result<PathBuf> {
+    let dir = data_root.join("backups").join(today_utc());
+    fs::create_dir_all(&dir).map_err(|error| Error::Io(error.to_string()))?;
+    // Same-day second migration: never clobber the earlier backup.
+    let mut target = dir.join(file);
+    for attempt in 1.. {
+        if !target.exists() {
+            break;
+        }
+        target = dir.join(file.replace(".json", &format!("-{attempt}.json")));
+    }
+    let tmp = target.with_extension("json.tmp");
+    fs::copy(slice_path, &tmp).map_err(|error| Error::Io(error.to_string()))?;
+    fs::rename(&tmp, &target).map_err(|error| Error::Io(error.to_string()))?;
+    Ok(target)
+}
+
+/// Keep only the [`BACKUP_DIRS_TO_KEEP`] most recent date-stamped backup dirs.
+/// Best-effort: individual failures are ignored, like the trash purge.
+fn prune_backup_dirs(data_root: &Path) {
+    let Ok(entries) = fs::read_dir(data_root.join("backups")) else {
+        return;
+    };
+    let mut dated: Vec<String> = entries
+        .flatten()
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .filter(|name| {
+            name.len() == 10
+                && name.as_bytes()[4] == b'-'
+                && name.as_bytes()[7] == b'-'
+                && name
+                    .bytes()
+                    .enumerate()
+                    .all(|(index, byte)| index == 4 || index == 7 || byte.is_ascii_digit())
+        })
+        .collect();
+    dated.sort(); // ISO dates sort chronologically as text.
+    let excess = dated.len().saturating_sub(BACKUP_DIRS_TO_KEEP);
+    for name in &dated[..excess] {
+        let _ = fs::remove_dir_all(data_root.join("backups").join(name));
+    }
+}
+
+/// Atomically write a versioned slice file (`{schemaVersion, value}` wrapper).
+fn write_versioned_slice(
+    path: &Path,
+    schema_version: u32,
+    value: &serde_json::Value,
+) -> Result<()> {
+    let payload = serde_json::json!({ "schemaVersion": schema_version, "value": value });
+    let serialized =
+        serde_json::to_vec_pretty(&payload).map_err(|error| Error::Corrupt(error.to_string()))?;
+    if serialized.len() as u64 > MAX_SLICE_BYTES {
+        return Err(Error::SliceTooLarge);
+    }
+    let parent = path.parent().ok_or(Error::InvalidSliceKey)?;
+    fs::create_dir_all(parent).map_err(|error| Error::Io(error.to_string()))?;
+    let tmp = path.with_extension("json.tmp");
+    {
+        let mut file = fs::File::create(&tmp).map_err(|error| Error::Io(error.to_string()))?;
+        file.write_all(&serialized)
+            .and_then(|()| file.sync_all())
+            .map_err(|error| Error::Io(error.to_string()))?;
+    }
+    fs::rename(&tmp, path).map_err(|error| Error::Io(error.to_string()))
+}
+
+/// Load a versioned slice: `Ok(None)` when the file does not exist yet;
+/// migrate (backing up first) when its schemaVersion is behind; refuse with an
+/// error naming the file when it is ahead. The original file is left readable
+/// unless the migrated version has been written successfully.
+fn load_versioned_slice(
+    data_root: &Path,
+    file: &str,
+    latest: u32,
+    migrations: &[SliceMigration],
+) -> Result<Option<serde_json::Value>> {
+    let path = data_root.join(file);
+    let metadata = match fs::metadata(&path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(Error::Io(error.to_string())),
+    };
+    if metadata.len() > MAX_SLICE_BYTES {
+        return Err(Error::SliceTooLarge);
+    }
+    let raw = fs::read(&path).map_err(|error| Error::Io(error.to_string()))?;
+    let slice: Slice =
+        serde_json::from_slice(&raw).map_err(|error| Error::Corrupt(error.to_string()))?;
+    let found = u32::try_from(slice.schema_version).map_err(|_| Error::SliceSchemaTooNew {
+        file: file.to_owned(),
+        found: u32::MAX,
+        supported: latest,
+    })?;
+    if found > latest {
+        return Err(Error::SliceSchemaTooNew {
+            file: file.to_owned(),
+            found,
+            supported: latest,
+        });
+    }
+    if found == latest {
+        return Ok(Some(slice.value));
+    }
+    backup_before_migration(data_root, &path, file)?;
+    let migrated = run_slice_migrations(file, slice.value, found, latest, migrations)?;
+    write_versioned_slice(&path, latest, &migrated)?;
+    prune_backup_dirs(data_root);
+    Ok(Some(migrated))
+}
+
+pub(crate) fn load_channels(data_root: &Path) -> Result<Option<Channels>> {
+    Ok(load_versioned_slice(
+        data_root,
+        slice_names::CHANNELS,
+        CHANNELS_LATEST,
+        NO_MIGRATIONS,
+    )?
+    .map(|value| serde_json::from_value(value).unwrap_or_default()))
+}
+
+pub(crate) fn save_channels(data_root: &Path, channels: &Channels) -> Result<()> {
+    let value =
+        serde_json::to_value(channels).map_err(|error| Error::Corrupt(error.to_string()))?;
+    write_versioned_slice(
+        &data_root.join(slice_names::CHANNELS),
+        CHANNELS_LATEST,
+        &value,
+    )
+}
+
+pub(crate) fn load_projects(data_root: &Path) -> Result<Option<Projects>> {
+    Ok(load_versioned_slice(
+        data_root,
+        slice_names::PROJECTS,
+        PROJECTS_LATEST,
+        NO_MIGRATIONS,
+    )?
+    .map(|value| serde_json::from_value(value).unwrap_or_default()))
+}
+
+pub(crate) fn save_projects(data_root: &Path, projects: &Projects) -> Result<()> {
+    let value =
+        serde_json::to_value(projects).map_err(|error| Error::Corrupt(error.to_string()))?;
+    write_versioned_slice(
+        &data_root.join(slice_names::PROJECTS),
+        PROJECTS_LATEST,
+        &value,
+    )
+}
+
+pub(crate) fn load_workflows(data_root: &Path) -> Result<Option<Workflows>> {
+    Ok(load_versioned_slice(
+        data_root,
+        slice_names::WORKFLOWS,
+        WORKFLOWS_LATEST,
+        NO_MIGRATIONS,
+    )?
+    .map(|value| serde_json::from_value(value).unwrap_or_default()))
+}
+
+pub(crate) fn save_workflows(data_root: &Path, workflows: &Workflows) -> Result<()> {
+    let value =
+        serde_json::to_value(workflows).map_err(|error| Error::Corrupt(error.to_string()))?;
+    write_versioned_slice(
+        &data_root.join(slice_names::WORKFLOWS),
+        WORKFLOWS_LATEST,
+        &value,
+    )
+}
+
 /// Migrate a legacy data root, then purge expired trash. Once, from `run()`,
 /// before any command can touch the store.
 pub(crate) fn startup_maintenance(app: &tauri::AppHandle) {
     if let Ok(root) = data_root(app) {
         migrate_legacy_root(app, &root);
         purge_trash_dir(&root);
+        prune_backup_dirs(&root);
     }
 }
 
@@ -374,6 +669,29 @@ pub(crate) fn store_delete_blob(app: tauri::AppHandle, id: &str) -> Result<()> {
 pub(crate) fn store_list_blobs(app: tauri::AppHandle) -> Result<Vec<String>> {
     let root = data_root(&app)?;
     Ok(list_blob_ids(&root))
+}
+
+/// The channel list (a versioned slice, unlike the legacy root slices — see
+/// `slice_names`). Dedicated commands rather than `store_read`/`store_write`,
+/// because the versioned wrapper means the file is not a bare slice.
+#[tauri::command]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "tauri commands must take AppHandle by value"
+)]
+pub(crate) fn channels_read(app: tauri::AppHandle) -> Result<Option<Channels>> {
+    let root = data_root(&app)?;
+    load_channels(&root)
+}
+
+#[tauri::command]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "tauri commands must take AppHandle by value"
+)]
+pub(crate) fn channels_write(app: tauri::AppHandle, channels: Channels) -> Result<()> {
+    let root = data_root(&app)?;
+    save_channels(&root, &channels)
 }
 
 /// Characters allowed in the filename built from a Blob's name.
@@ -548,6 +866,30 @@ mod tests {
         );
         assert!(resolve_slice_path(root, &format!("blobs/{BLOB_ID}/transcript-42")).is_ok());
         assert!(resolve_slice_path(root, &format!("groups/{BLOB_ID}/transcript-7")).is_ok());
+        // Channels key exactly like groups, under their own root.
+        assert!(resolve_slice_path(root, &format!("channels/{BLOB_ID}/transcript")).is_ok());
+        assert!(resolve_slice_path(root, &format!("channels/{BLOB_ID}/recap")).is_ok());
+        assert!(resolve_slice_path(root, &format!("channels/{BLOB_ID}/transcript-3")).is_ok());
+        let message_id = "9f1b2c3d-4e5f-4a6b-8c7d-0e1f2a3b4c5d";
+        assert_eq!(
+            resolve_slice_path(
+                root,
+                &format!("channels/{BLOB_ID}/threads/{message_id}/transcript")
+            )
+            .unwrap_or_else(|_| panic!("thread")),
+            root.join("channels")
+                .join(BLOB_ID)
+                .join("threads")
+                .join(message_id)
+                .join("transcript.json")
+        );
+        assert!(
+            resolve_slice_path(
+                root,
+                &format!("channels/{BLOB_ID}/threads/{message_id}/recap")
+            )
+            .is_ok()
+        );
     }
 
     #[test]
@@ -611,6 +953,12 @@ mod tests {
             &format!("groups/{BLOB_ID}/config"),
             "groups/not-a-uuid/transcript",
             "groups/../evil/transcript",
+            &format!("channels/{BLOB_ID}/config"),
+            "channels/not-a-uuid/transcript",
+            &format!("channels/{BLOB_ID}/threads/not-a-uuid/transcript"),
+            &format!("channels/{BLOB_ID}/threads/../transcript"),
+            &format!("channels/{BLOB_ID}/threads/{BLOB_ID}/unknown"),
+            &format!("channels/{BLOB_ID}/threads/{BLOB_ID}/transcript/../../evil"),
             "unknown",
             "users",
             "user/x",
@@ -863,5 +1211,170 @@ mod tests {
         assert!(!is_valid_blob_id("61EC34F1-9BA5-4EFF-B8E1-7ACEFB2148EA"));
         assert!(!is_valid_blob_id("../../../etc"));
         assert!(!is_valid_blob_id("61ec34f19ba54effb8e17acefb2148ea"));
+    }
+
+    // A stand-in migration (v1 value -> v2 value) so the runner can be
+    // exercised before any real migration exists.
+    fn test_v1_to_v2(value: serde_json::Value) -> std::result::Result<serde_json::Value, String> {
+        let mut object = value.as_object().cloned().unwrap_or_default();
+        object.insert("migratedTo".to_owned(), 2.into());
+        Ok(serde_json::Value::Object(object))
+    }
+
+    #[test]
+    fn migrates_v1_data_and_writes_the_new_version_back() {
+        let root = temp_root("slice-migrate");
+        fs::write(
+            root.join(slice_names::CHANNELS),
+            br#"{"schemaVersion": 1, "value": {"rows": []}}"#,
+        )
+        .unwrap_or_else(|_| panic!("seed"));
+
+        let loaded = load_versioned_slice(
+            &root,
+            slice_names::CHANNELS,
+            2,
+            &[test_v1_to_v2 as SliceMigration],
+        )
+        .unwrap_or_else(|_| panic!("load"));
+        let value = loaded.expect("some");
+        assert_eq!(value.pointer("/migratedTo"), Some(&serde_json::json!(2)));
+        assert_eq!(value.pointer("/rows"), Some(&serde_json::json!([])));
+
+        // The migrated file now carries the new version, so a second load is
+        // a plain read with no further backup.
+        let raw: Slice = serde_json::from_slice(
+            &fs::read(root.join(slice_names::CHANNELS)).unwrap_or_else(|_| panic!("re-read")),
+        )
+        .unwrap_or_else(|_| panic!("parse"));
+        assert_eq!(raw.schema_version, 2);
+    }
+
+    #[test]
+    fn migration_leaves_a_backup_of_the_original_bytes() {
+        let root = temp_root("slice-backup");
+        let original = br#"{"schemaVersion": 1, "value": {"keep": true}}"#;
+        fs::write(root.join(slice_names::PROJECTS), original).unwrap_or_else(|_| panic!("seed"));
+
+        load_versioned_slice(
+            &root,
+            slice_names::PROJECTS,
+            2,
+            &[test_v1_to_v2 as SliceMigration],
+        )
+        .unwrap_or_else(|_| panic!("load"));
+
+        let today = today_utc();
+        let backup = root
+            .join("backups")
+            .join(&today)
+            .join(slice_names::PROJECTS);
+        assert_eq!(
+            fs::read(&backup).unwrap_or_else(|_| panic!("backup exists")),
+            original.to_vec()
+        );
+    }
+
+    #[test]
+    fn a_failed_migration_leaves_the_original_readable() {
+        let root = temp_root("slice-failed-migration");
+        fs::write(
+            root.join(slice_names::WORKFLOWS),
+            br#"{"schemaVersion": 1, "value": {}}"#,
+        )
+        .unwrap_or_else(|_| panic!("seed"));
+
+        // Table promises v1 -> v3 but is empty: the runner must refuse rather
+        // than guess, and the file must still be readable as-is.
+        let refused =
+            load_versioned_slice(&root, slice_names::WORKFLOWS, 3, &[]).expect_err("must refuse");
+        assert!(matches!(refused, Error::Corrupt(_)), "got: {refused}");
+        let raw: Slice = serde_json::from_slice(
+            &fs::read(root.join(slice_names::WORKFLOWS)).unwrap_or_else(|_| panic!("re-read")),
+        )
+        .unwrap_or_else(|_| panic!("parse"));
+        assert_eq!(raw.schema_version, 1);
+    }
+
+    #[test]
+    fn a_newer_schema_is_refused_and_the_file_is_untouched() {
+        let root = temp_root("slice-too-new");
+        let original = br#"{"schemaVersion": 99, "value": {"future": true}}"#;
+        let path = root.join(slice_names::CHANNELS);
+        fs::write(&path, original).unwrap_or_else(|_| panic!("seed"));
+
+        let refused = load_channels(&root).expect_err("must refuse");
+        assert!(
+            matches!(
+                &refused,
+                Error::SliceSchemaTooNew { file, found: 99, .. }
+                    if file == slice_names::CHANNELS
+            ),
+            "got: {refused}"
+        );
+        // Not rewritten, not backed up, still readable.
+        assert_eq!(
+            fs::read(&path).unwrap_or_else(|_| panic!("untouched")),
+            original.to_vec()
+        );
+        assert!(!root.join("backups").exists());
+    }
+
+    #[test]
+    fn retention_keeps_only_the_five_most_recent_backup_days() {
+        let root = temp_root("slice-retention");
+        for day in [
+            "2020-01-01",
+            "2021-01-01",
+            "2022-01-01",
+            "2023-01-01",
+            "2024-01-01",
+            "2025-01-01",
+        ] {
+            fs::create_dir_all(root.join("backups").join(day))
+                .unwrap_or_else(|_| panic!("backup dir {day}"));
+            fs::write(
+                root.join("backups").join(day).join(slice_names::CHANNELS),
+                b"{}",
+            )
+            .unwrap_or_else(|_| panic!("seed {day}"));
+        }
+
+        prune_backup_dirs(&root);
+
+        assert!(!root.join("backups").join("2020-01-01").exists());
+        for day in ["2021-01-01", "2025-01-01"] {
+            assert!(root.join("backups").join(day).is_dir(), "pruned {day}");
+        }
+    }
+
+    #[test]
+    fn typed_load_save_round_trips_and_missing_reads_as_none() {
+        let root = temp_root("slice-typed");
+        assert_eq!(
+            load_channels(&root).unwrap_or_else(|_| panic!("load")),
+            None
+        );
+        assert_eq!(
+            load_projects(&root).unwrap_or_else(|_| panic!("load")),
+            None
+        );
+        assert_eq!(
+            load_workflows(&root).unwrap_or_else(|_| panic!("load")),
+            None
+        );
+
+        let channels: Channels = vec![serde_json::json!({ "id": "c1" })];
+        save_channels(&root, &channels).unwrap_or_else(|_| panic!("save"));
+        assert_eq!(
+            load_channels(&root).unwrap_or_else(|_| panic!("reload")),
+            Some(channels)
+        );
+
+        let raw: Slice = serde_json::from_slice(
+            &fs::read(root.join(slice_names::CHANNELS)).unwrap_or_else(|_| panic!("read")),
+        )
+        .unwrap_or_else(|_| panic!("parse"));
+        assert_eq!(raw.schema_version, 1);
     }
 }

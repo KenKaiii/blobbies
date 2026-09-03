@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Agent, Message } from "@/data/agents";
+import { type Channel, channelConversationId, threadConversationId } from "@/lib/channels";
 import { groupConversationId } from "@/lib/groups";
 import * as store from "@/lib/store";
 
@@ -213,6 +214,63 @@ describe("store (browser fallback)", () => {
 
     expect(await store.loadGroupTranscript(GROUP_ID)).toEqual([line("g1")]);
     expect(await store.loadBlobTranscript(BLOB_ID)).toEqual([line("b1")]);
+  });
+
+  it("routes a channel conversation by its id, and round-trips the channel list", async () => {
+    const CHANNEL_ID = "8e0a1b2c-3d4e-5f60-7a8b-9c0d1e2f3a4b";
+    const line = (id: string): Message => ({
+      id,
+      kind: "text",
+      author: "user",
+      segments: [{ text: id }],
+    });
+    // `channel:` must land in the channel's own slice, never a Blob's — the
+    // routing is by prefix, so a collision would be silent.
+    store.saveConversation(channelConversationId(CHANNEL_ID), [line("c1")]);
+    window.dispatchEvent(new Event("beforeunload"));
+    expect(await store.loadChannelTranscript(CHANNEL_ID)).toEqual([line("c1")]);
+
+    expect(await store.loadChannels()).toBeNull();
+    const channels: Channel[] = [
+      { id: CHANNEL_ID, name: "ops", kind: "channel", memberIds: [BLOB_ID] },
+    ];
+    store.saveChannels(channels);
+    window.dispatchEvent(new Event("beforeunload"));
+    expect(await store.loadChannels()).toEqual(channels);
+  });
+
+  it("keeps a thread transcript and recap isolated from its parent channel", async () => {
+    const channelId = "8e0a1b2c-3d4e-5f60-7a8b-9c0d1e2f3a4b";
+    const messageId = "9f1b2c3d-4e5f-4a6b-8c7d-0e1f2a3b4c5d";
+    const line = (id: string): Message => ({
+      id,
+      kind: "text",
+      author: "user",
+      segments: [{ text: id }],
+    });
+    store.saveConversation(channelConversationId(channelId), [line("root")]);
+    const threadId = threadConversationId(channelId, messageId);
+    store.saveConversation(threadId, [line("reply")]);
+    store.saveRecap(threadId, { text: "thread recap", coveredId: "reply" });
+    window.dispatchEvent(new Event("beforeunload"));
+
+    expect(await store.loadChannelTranscript(channelId)).toEqual([line("root")]);
+    expect(await store.loadThreadTranscript(channelId, messageId)).toEqual([line("reply")]);
+    expect(await store.loadRecap(threadId)).toEqual({ text: "thread recap", coveredId: "reply" });
+    expect(store.conversationSliceKey(threadId)).toBe(
+      `channels/${channelId}/threads/${messageId}/transcript`,
+    );
+  });
+
+  it("round-trips a DM channel kind", async () => {
+    const dm: Channel = {
+      id: "8e0a1b2c-3d4e-5f60-7a8b-9c0d1e2f3a4b",
+      name: "Ken",
+      kind: "dm",
+      memberIds: [BLOB_ID],
+    };
+    await store.saveChannels([dm]);
+    expect(await store.loadChannels()).toEqual([dm]);
   });
 
   it("round-trips the group list, and reads a hand-edited one as none", async () => {
