@@ -62,7 +62,7 @@ regex = { version = "1.13.1", default-features = false, features = [
     "unicode-perl",
 ] }
 walkdir = "2.5.0"
-ocrs = "0.12.2"
+ocrs = "0.13.0"
 # 0.24, not 0.25: rten 0.25 raised its MSRV to 1.94 and this crate is pinned to
 # 1.90 on purpose (see rust-toolchain.toml). ocrs accepts ^0.24, so the older
 # line is a supported pairing rather than a downgrade — revisit when the
