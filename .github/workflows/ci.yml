@@ -72,7 +72,7 @@ jobs:
       # Installs the exact toolchain + components pinned in rust-toolchain.toml.
       - run: rustup show active-toolchain || rustup toolchain install
 
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: src-tauri
 
@@ -105,7 +105,7 @@ jobs:
       # Caches ~/.cargo/bin (cache-bin defaults true), so the cargo-audit build below
       # is a no-op on subsequent runs. cache-all-crates keeps its deps too, since
       # cargo-audit is CI tooling rather than a dependency of this crate.
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: src-tauri
           cache-all-crates: true
